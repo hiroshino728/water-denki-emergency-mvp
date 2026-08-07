@@ -1,0 +1,3 @@
+[submodule "docs"]
+	path = docs
+	url = https://github.com/hiroshino728/mizu-denki-emergency-docs.git
