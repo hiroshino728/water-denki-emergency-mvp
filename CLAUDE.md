@@ -20,8 +20,9 @@ Current Handoffの `Updated:` を書く際は、システムから渡される�
 
 Claude Code(このリポジトリのセッション)が使うブラウザ拡張(Claude in Chrome)は、`bubble.io` / `*.bubbleapps.io` へのナビゲーションがポリシーでブロックされ、自動操作できないことを確認済み([`docs/poc/LINE-03-liff-bubble-poc.md`](docs/poc/LINE-03-liff-bubble-poc.md) 参照)。「サイトへのアクセス」設定を「すべてのサイト」にしていてもブロックされる。
 
-- Bubbleエディタ上での実際の設定作業(画面操作)は、篠さん本人が手作業で行う前提とする。
-- Claude Codeが担当できるのは、変更手順書・実装案・テスト手順の作成、および設計書(`docs/`)の更新までである(AGENTS.md第6項の承認境界とも一致する)。
+- `docs/ai_collaboration_rules_v2.1.md` 3節により、Bubble操作は「まずAI直接実行を試す」方針に変わったが、上記の技術的制約が解消したわけではない。Claude in Chromeでの直接操作は現状失敗する前提で臨み、失敗した場合はその旨と原因をIssueに記録して`execution:ai-semi-auto`または`execution:human-bubble`へ切り替える。
+- 「Bubble AI操作能力検証」Issueにおける操作能力の検証自体も、実施前にチャットで明示的な了承を得てから着手する(AGENTS.md第5項)。
+- Bubble Production環境の構造変更(データモデル変更、Workflow変更、既存ページの破壊的変更等)は、`execution`の判定結果に関わらず、実行前に人間の明示的な承認を得る(AGENTS.md第5項)。Claude Codeが単独で担当してよいのは、変更手順書・実装案・テスト手順の作成、および設計書(`docs/`)の更新までである。
 - LINE Developers Consoleなど、Bubble以外の管理画面については個別に到達可否を確認してから判断する(LINE-03では認証済みセッションでの操作が可能だった実績がある)。
 
 ### サブエージェント(Agent tool)の使い方
