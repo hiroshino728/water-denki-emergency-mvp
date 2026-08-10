@@ -12,17 +12,15 @@
  *     事前に読み込まれていること（Bubbleの「Page HTML header」等で読み込む想定）。
  *
  * 使い方：
- *   1. 下記 LIFF_ID を、LINE Developers Consoleで発行されたLIFF IDに置き換える。
- *   2. Bubble側のワークフローで、以下のコールバックを定義しておく（Toolbox準拠）。
- *      - bubble_fn_setUserId(userId: string)
- *      - bubble_fn_setDisplayName(displayName: string)
- *      - bubble_fn_setError(message: string)  // 任意。異常系(TC-06)の可視化用
+ *   Bubble側のワークフローで、以下のコールバックを定義しておく（Toolbox準拠）。
+ *   - bubble_fn_userid(userId: string)
+ *   - bubble_fn_displayname(displayName: string)
+ *   - bubble_fn_error(message: string)  // 任意。異常系(TC-06)の可視化用
  *
  * 参照：docs/poc/LINE-03-liff-bubble-poc.md
  */
 (function () {
-  // 🔶 手順Aで発行されたLIFF IDに置き換えること（例: "1234567890-abcdefgh"）
-  var LIFF_ID = "YOUR_LIFF_ID";
+  var LIFF_ID = "2011043480-hLNRE7GE";
 
   function log() {
     var args = Array.prototype.slice.call(arguments);
@@ -33,8 +31,8 @@
   function reportError(stage, error) {
     var message = stage + ": " + (error && error.message ? error.message : String(error));
     console.error("[line03-liff]", message);
-    if (typeof bubble_fn_setError === "function") {
-      bubble_fn_setError(message);
+    if (typeof bubble_fn_error === "function") {
+      bubble_fn_error(message);
     }
   }
 
@@ -68,16 +66,19 @@
         return;
       }
 
-      log("userId=", profile.userId, "displayName=", profile.displayName);
+      // LINE User IDや表示名は個人識別情報のためログへ出力しない。
+      log("profile acquired");
 
-      if (typeof bubble_fn_setUserId === "function") {
-        bubble_fn_setUserId(profile.userId);
+      if (typeof bubble_fn_userid === "function") {
+        bubble_fn_userid(profile.userId);
       } else {
-        reportError("callback", new Error("bubble_fn_setUserId が定義されていません"));
+        reportError("callback", new Error("bubble_fn_userid が定義されていません"));
       }
 
-      if (typeof bubble_fn_setDisplayName === "function") {
-        bubble_fn_setDisplayName(profile.displayName);
+      if (typeof bubble_fn_displayname === "function") {
+        bubble_fn_displayname(profile.displayName);
+      } else {
+        reportError("callback", new Error("bubble_fn_displayname が定義されていません"));
       }
     })
     .catch(function (error) {
@@ -91,7 +92,7 @@
   //
   // liff.init({ liffId: LIFF_ID }).then(function () {
   //   var idToken = liff.getIDToken();
-  //   log("idToken=", idToken);
+  //   // IDトークンは秘密情報のためログへ出力しない。
   //   if (typeof bubble_fn_setIdToken === "function") {
   //     bubble_fn_setIdToken(idToken);
   //   }
