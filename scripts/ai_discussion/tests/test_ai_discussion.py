@@ -88,6 +88,20 @@ class RouterTests(unittest.TestCase):
 
 
 class DiscussionTests(unittest.TestCase):
+    def test_anthropic_uses_supported_output_config_schema(self) -> None:
+        response = {
+            "content": [{"type": "text", "text": json.dumps(round_value("unresolved"))}],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        with patch.object(discuss, "post_json", return_value=response) as post:
+            value, usage = discuss.call_anthropic("prompt", "claude-test", 1000, "secret")
+        payload = post.call_args.args[1]
+        output_format = payload["output_config"]["format"]
+        self.assertEqual(output_format["type"], "json_schema")
+        self.assertNotIn("minLength", json.dumps(output_format["schema"]))
+        self.assertEqual(value["status"], "unresolved")
+        self.assertEqual(usage, {"input_tokens": 10, "output_tokens": 5})
+
     def test_first_exchange_converges_after_two_api_call_rounds(self) -> None:
         speakers: list[str] = []
 
@@ -117,6 +131,12 @@ class DiscussionTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(discuss.ConfigurationError, "at least 2"):
                 discuss.run_discussion("2AI討議", {"first_mover": "chatgpt"})
+
+    def test_converged_with_unresolved_classification_continues_as_unresolved(self) -> None:
+        value = discuss.validate_round(round_value("converged", "unresolved"), 2)
+        self.assertEqual(value["status"], "unresolved")
+        self.assertIsNone(value["proposed_synthesis"])
+        self.assertTrue(value["unresolved_points"])
 
     def test_unresolved_runs_to_max_rounds_without_synthesis(self) -> None:
         def unresolved(prompt: str, model: str, max_tokens: int, key: str):

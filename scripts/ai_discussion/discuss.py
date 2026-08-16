@@ -25,13 +25,13 @@ ROUND_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "status": {"type": "string", "enum": ["converged", "unresolved"]},
-        "position": {"type": "string", "minLength": 1},
+        "position": {"type": "string"},
         "agreements": {"type": "array", "items": {"type": "string"}},
         "unresolved_points": {"type": "array", "items": {"type": "string"}},
         "proposed_synthesis": {"type": ["string", "null"]},
         "decision_classification": {"type": "string", "enum": CLASSIFICATIONS},
-        "classification_reason": {"type": "string", "minLength": 1},
-        "objective": {"type": "string", "minLength": 1},
+        "classification_reason": {"type": "string"},
+        "objective": {"type": "string"},
         "scope": {"type": "array", "items": {"type": "string"}},
         "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
         "test_cases": {"type": "array", "items": {"type": "string"}},
@@ -164,6 +164,12 @@ def validate_round(value: dict[str, Any], round_number: int) -> dict[str, Any]:
 
     # A single opening statement cannot establish agreement between two models.
     if round_number == 1:
+        value["status"] = "unresolved"
+        value["proposed_synthesis"] = None
+    # A model cannot claim convergence while leaving the downstream decision
+    # path unresolved. Preserve the paid result as an unresolved round instead
+    # of failing the pipeline in classify.py.
+    if value["status"] == "converged" and value["decision_classification"] == "unresolved":
         value["status"] = "unresolved"
         value["proposed_synthesis"] = None
     if value["status"] == "converged":

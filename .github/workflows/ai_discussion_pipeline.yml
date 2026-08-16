@@ -22,7 +22,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: ai-discussion-${{ github.run_id }}
+  group: ai-discussion-pipeline
   cancel-in-progress: false
 
 jobs:

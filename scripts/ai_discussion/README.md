@@ -34,7 +34,7 @@ Issue #35 のV1実装です。Claude APIとOpenAI APIを交互に1回ずつ呼�
 |---|---|
 | `ROUTER_MODEL` | OpenAIの先攻判定モデル |
 | `OPENAI_DISCUSSION_MODEL` | ChatGPT討議モデル |
-| `ANTHROPIC_DISCUSSION_MODEL` | Claude討議モデル |
+| `ANTHROPIC_DISCUSSION_MODEL` | Claude討議モデル（`output_config.format`のstructured outputs対応モデルを指定） |
 | `MAX_OUTPUT_TOKENS` | 1 API callあたりの最大出力token数 |
 | `MAX_ROUNDS` | 最大討議ラウンド数。1ラウンドは1 API call、最小値は`2`、未設定時は`3` |
 | `ROUTER_INPUT_USD_PER_MTOK` | ルーターモデルの入力100万tokenあたりUSD |

@@ -17,8 +17,10 @@ jobs:
     if: >-
       !github.event.issue.pull_request &&
       github.event.comment.user.login == github.repository_owner &&
-      (startsWith(github.event.comment.body, '/approve') ||
-       startsWith(github.event.comment.body, '/reject'))
+      (github.event.comment.body == '/approve' ||
+       startsWith(github.event.comment.body, format('/approve{0}', fromJSON('"\n"'))) ||
+       github.event.comment.body == '/reject' ||
+       startsWith(github.event.comment.body, format('/reject{0}', fromJSON('"\n"'))))
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
