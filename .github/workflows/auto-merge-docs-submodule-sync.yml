@@ -73,6 +73,7 @@ jobs:
             const { execFileSync, spawnSync } = require('node:child_process');
             const prNumber = Number(process.env.PR_NUMBER);
             const expectedRepository = 'hiroshino728/water-denki-emergency-mvp';
+            const docsRepository = 'https://github.com/hiroshino728/mizu-denki-emergency-docs.git';
             const failures = [];
             const checks = [];
             const record = (name, passed, detail) => {
@@ -215,6 +216,36 @@ jobs:
                 gitlinkMode && commitLines.length === 2,
                 `gitlink_mode=${gitlinkMode}, subproject_lines=${commitLines.length}`,
               );
+              const gitlinkSha = treeish => {
+                const entry = execFileSync(
+                  'git', ['ls-tree', treeish, '--', 'docs'], { encoding: 'utf8' },
+                ).trim();
+                const match = entry.match(/^160000 commit ([0-9a-f]{40})\tdocs$/);
+                if (!match) throw new Error(`Unable to resolve docs gitlink at ${treeish}`);
+                return match[1];
+              };
+              const baseDocsSha = gitlinkSha('origin/main');
+              const targetDocsSha = gitlinkSha('HEAD');
+              execFileSync('git', ['fetch', '--no-tags', docsRepository, 'main'], { stdio: 'pipe' });
+              const docsMainSha = execFileSync(
+                'git', ['rev-parse', 'FETCH_HEAD'], { encoding: 'utf8' },
+              ).trim();
+              const baseIsReachable = spawnSync(
+                'git', ['merge-base', '--is-ancestor', baseDocsSha, docsMainSha],
+              ).status === 0;
+              const targetIsReachable = spawnSync(
+                'git', ['merge-base', '--is-ancestor', targetDocsSha, docsMainSha],
+              ).status === 0;
+              const isForwardUpdate = baseDocsSha !== targetDocsSha && spawnSync(
+                'git', ['merge-base', '--is-ancestor', baseDocsSha, targetDocsSha],
+              ).status === 0;
+              record(
+                '3.2 docs target is a forward update reachable from docs main',
+                baseIsReachable && targetIsReachable && isForwardUpdate,
+                `base=${baseDocsSha}, target=${targetDocsSha}, docs_main=${docsMainSha}, ` +
+                  `base_reachable=${baseIsReachable}, target_reachable=${targetIsReachable}, ` +
+                  `forward=${isForwardUpdate}`,
+              );
               const workflowMatchesMain = spawnSync(
                 'git',
                 ['diff', '--quiet', 'origin/main', '--', '.github/workflows/auto-merge-docs-submodule-sync.yml'],
@@ -311,6 +342,7 @@ jobs:
             const prNumber = Number(process.env.PR_NUMBER);
             const expectedSha = process.env.EXPECTED_HEAD_SHA;
             const expectedRepository = 'hiroshino728/water-denki-emergency-mvp';
+            const docsRepository = 'https://github.com/hiroshino728/mizu-denki-emergency-docs.git';
             let pull;
             for (let attempt = 1; attempt <= 5; attempt += 1) {
               ({ data: pull } = await github.rest.pulls.get({
@@ -353,6 +385,30 @@ jobs:
               core.setFailed('Unable to refresh origin/main immediately before merge.');
               return;
             }
+            const gitlinkSha = treeish => {
+              const entry = spawnSync(
+                'git', ['ls-tree', treeish, '--', 'docs'], { encoding: 'utf8' },
+              );
+              const match = entry.stdout?.trim().match(/^160000 commit ([0-9a-f]{40})\tdocs$/);
+              return entry.status === 0 ? match?.[1] : undefined;
+            };
+            const baseDocsSha = gitlinkSha('origin/main');
+            const targetDocsSha = gitlinkSha('HEAD');
+            const fetchDocsMain = spawnSync(
+              'git', ['fetch', '--no-tags', docsRepository, 'main'],
+            );
+            const docsMain = spawnSync('git', ['rev-parse', 'FETCH_HEAD'], { encoding: 'utf8' });
+            const docsMainSha = docsMain.status === 0 ? docsMain.stdout.trim() : undefined;
+            const baseIsReachable = Boolean(baseDocsSha && docsMainSha) && spawnSync(
+              'git', ['merge-base', '--is-ancestor', baseDocsSha, docsMainSha],
+            ).status === 0;
+            const targetIsReachable = Boolean(targetDocsSha && docsMainSha) && spawnSync(
+              'git', ['merge-base', '--is-ancestor', targetDocsSha, docsMainSha],
+            ).status === 0;
+            const isForwardUpdate = Boolean(baseDocsSha && targetDocsSha) &&
+              baseDocsSha !== targetDocsSha && spawnSync(
+                'git', ['merge-base', '--is-ancestor', baseDocsSha, targetDocsSha],
+              ).status === 0;
             const workflowMatchesMain = spawnSync(
               'git',
               ['diff', '--quiet', 'origin/main', '--', '.github/workflows/auto-merge-docs-submodule-sync.yml'],
@@ -371,6 +427,10 @@ jobs:
               files[0].filename === 'docs' &&
               badRuns.length === 0 &&
               statusesPass &&
+              fetchDocsMain.status === 0 &&
+              baseIsReachable &&
+              targetIsReachable &&
+              isForwardUpdate &&
               workflowMatchesMain;
             if (!stillEligible) {
               core.setFailed(
@@ -381,7 +441,10 @@ jobs:
                 `files=[${files.map(file => file.filename).join(', ')}], ` +
                 `mergeable=${pull.mergeable}, mergeable_state=${pull.mergeable_state}, ` +
                 `bad_checks=[${badRuns.map(run => run.name).join(', ')}], ` +
-                `commit_status=${combinedStatus.state}, workflow_matches_main=${workflowMatchesMain}`,
+                `commit_status=${combinedStatus.state}, base_docs=${baseDocsSha || 'unknown'}, ` +
+                `target_docs=${targetDocsSha || 'unknown'}, docs_main=${docsMainSha || 'unknown'}, ` +
+                `base_reachable=${baseIsReachable}, target_reachable=${targetIsReachable}, ` +
+                `forward=${isForwardUpdate}, workflow_matches_main=${workflowMatchesMain}`,
               );
               return;
             }
