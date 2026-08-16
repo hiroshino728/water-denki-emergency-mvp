@@ -172,9 +172,16 @@ def validate_round(value: dict[str, Any], round_number: int) -> dict[str, Any]:
     if value["status"] == "converged" and value["decision_classification"] == "unresolved":
         value["status"] = "unresolved"
         value["proposed_synthesis"] = None
+    # Structured output guarantees the field exists, but it deliberately allows
+    # null for unresolved rounds. If a model combines converged with an empty
+    # synthesis, keep the paid response as unresolved instead of aborting the run.
+    if value["status"] == "converged" and (
+        not isinstance(value["proposed_synthesis"], str)
+        or not value["proposed_synthesis"].strip()
+    ):
+        value["status"] = "unresolved"
+        value["proposed_synthesis"] = None
     if value["status"] == "converged":
-        if not isinstance(value["proposed_synthesis"], str) or not value["proposed_synthesis"].strip():
-            raise RuntimeError("Converged round must include proposed_synthesis")
         if value["unresolved_points"]:
             raise RuntimeError("Converged round must not include unresolved_points")
         value["proposed_synthesis"] = value["proposed_synthesis"].strip()
