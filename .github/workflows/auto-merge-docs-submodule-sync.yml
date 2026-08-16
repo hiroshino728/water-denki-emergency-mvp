@@ -44,13 +44,15 @@ jobs:
               core.setFailed(`Invalid pr_number: ${rawNumber}`);
               return;
             }
+            // Preserve the target for the failure-escalation step even if the
+            // first pull-request API call fails.
+            core.setOutput('number', String(prNumber));
 
             const { data: pull } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber,
             });
-            core.setOutput('number', String(prNumber));
             core.setOutput('head_sha', pull.head.sha);
 
       - name: Check out pull request head
@@ -141,12 +143,7 @@ jobs:
               const otherRuns = checkRuns.filter(run =>
                 !String(run.details_url || '').includes(`/actions/runs/${context.runId}`),
               );
-              const latestByName = new Map();
-              for (const run of otherRuns.sort((a, b) => b.id - a.id)) {
-                if (!latestByName.has(run.name)) latestByName.set(run.name, run);
-              }
-              const latestRuns = [...latestByName.values()];
-              const badRuns = latestRuns.filter(run =>
+              const badRuns = otherRuns.filter(run =>
                 run.status !== 'completed' || run.conclusion !== 'success',
               );
               const { data: combinedStatus } = await github.rest.repos.getCombinedStatusForRef({
@@ -158,7 +155,7 @@ jobs:
               record(
                 '3.5 CI is absent or successful',
                 badRuns.length === 0 && statusesPass,
-                `latest_other_check_runs=${latestRuns.length}, bad=${badRuns.map(run => run.name).join(',') || 'none'}, commit_status=${combinedStatus.state}, statuses=${combinedStatus.total_count}`,
+                `other_check_runs=${otherRuns.length}, bad=${badRuns.map(run => run.name).join(',') || 'none'}, commit_status=${combinedStatus.state}, statuses=${combinedStatus.total_count}`,
               );
             } catch (error) {
               record('3.5 CI is absent or successful', false, `API error: ${error.message}`);
@@ -342,11 +339,7 @@ jobs:
             const otherRuns = checkRuns.filter(run =>
               !String(run.details_url || '').includes(`/actions/runs/${context.runId}`),
             );
-            const latestByName = new Map();
-            for (const run of otherRuns.sort((a, b) => b.id - a.id)) {
-              if (!latestByName.has(run.name)) latestByName.set(run.name, run);
-            }
-            const badRuns = [...latestByName.values()].filter(run =>
+            const badRuns = otherRuns.filter(run =>
               run.status !== 'completed' || run.conclusion !== 'success',
             );
             const { data: combinedStatus } = await github.rest.repos.getCombinedStatusForRef({
@@ -355,6 +348,11 @@ jobs:
               ref: pull.head.sha,
             });
             const statusesPass = combinedStatus.total_count === 0 || combinedStatus.state === 'success';
+            const fetchMain = spawnSync('git', ['fetch', '--no-tags', 'origin', 'main']);
+            if (fetchMain.status !== 0) {
+              core.setFailed('Unable to refresh origin/main immediately before merge.');
+              return;
+            }
             const workflowMatchesMain = spawnSync(
               'git',
               ['diff', '--quiet', 'origin/main', '--', '.github/workflows/auto-merge-docs-submodule-sync.yml'],
