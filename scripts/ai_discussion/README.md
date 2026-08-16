@@ -2,7 +2,7 @@
 
 Issue #35 のV1実装です。Claude APIとOpenAI APIを交互に1回ずつ呼び出し、各ラウンドで収束判定を行います。結果は通常の実装Issueではなく、CEO判断待ちのDecision Proposal Issueとして起票されます。
 
-このパイプラインでは、**1ラウンドを1モデルの応答（1 API call）**と定義します。両AIが1回ずつ発言する最初の往復（first exchange）はRound 1とRound 2で構成されるため、2AI間の一致を確認できる最短時点はRound 2終了時です。Round 1は初案として必ず`unresolved`になり、`MAX_ROUNDS`の最小値は2です。
+このパイプラインでは、通常時の**1ラウンドを1モデルの採用応答（1 API call）**と定義します。両AIが1回ずつ発言する最初の往復（first exchange）はRound 1とRound 2で構成されるため、2AI間の一致を確認できる最短時点はRound 2終了時です。Round 1は初案として必ず`unresolved`になり、`MAX_ROUNDS`の最小値は2です。JSON解析失敗時の回復用API callは同一ラウンド内の再試行として別途数えます。
 
 この仕組みがDecisionを確定することはありません。`/approve`または`/reject`を実行できるのはリポジトリ所有者だけで、`implementation_task`を承認した場合に限り、正式な後続Issueが生成されます。
 
@@ -37,6 +37,8 @@ Issue #35 のV1実装です。Claude APIとOpenAI APIを交互に1回ずつ呼�
 | `ANTHROPIC_DISCUSSION_MODEL` | Claude討議モデル（`output_config.format`のstructured outputs対応モデルを指定） |
 | `MAX_OUTPUT_TOKENS` | 1 API callあたりの最大出力token数 |
 | `MAX_ROUNDS` | 最大討議ラウンド数。1ラウンドは1 API call、最小値は`2`、未設定時は`3` |
+| `DISCUSSION_JSON_MAX_ATTEMPTS` | 討議モデルのJSON解析失敗時を含む最大試行回数。`1`〜`3`、未設定時は`2`（1回だけ再試行） |
+| `INVALID_JSON_LOG_MAX_CHARS` | JSON解析失敗時にログへ残すモデル生レスポンスの最大文字数。`100`〜`20000`、未設定時は`4000` |
 | `ROUTER_INPUT_USD_PER_MTOK` | ルーターモデルの入力100万tokenあたりUSD |
 | `ROUTER_OUTPUT_USD_PER_MTOK` | ルーターモデルの出力100万tokenあたりUSD |
 | `OPENAI_DISCUSSION_INPUT_USD_PER_MTOK` | ChatGPT討議モデルの入力100万tokenあたりUSD |
@@ -76,6 +78,8 @@ Issue #35 のV1実装です。Claude APIとOpenAI APIを交互に1回ずつ呼�
 - Issue単位の`concurrency`とコメントIDマーカーで同一コマンドの二重処理を防ぎます。
 - 実装Issueは元Proposal番号のマーカーで検索し、再実行時に重複生成しません。
 - APIキーはHTTP Authorization headerだけに設定し、生成AIへのpromptには含めません。
+- 討議モデルの応答がJSONとして解析できない場合だけ、同じラウンドを既定で1回再試行します。再試行は討議ラウンドを増やしませんが、実API call数・token usage・概算costには失敗した試行も含めます。HTTP認証・quota・通信エラーは自動再試行しません。
+- JSON解析失敗時は、原因調査のためモデル生レスポンスとプロバイダーの停止理由（`status` / `incomplete_details` / `stop_reason`）を1行JSONとして標準エラーへ出力します。改行はエスケープし、APIキーに一致する文字列は伏せ字にし、生レスポンスは既定で先頭4000文字までに制限します。議題に機密情報を含めるとモデル応答経由でActionsログへ残る可能性があるため、入力内容にも注意してください。
 
 ## ローカルテスト
 

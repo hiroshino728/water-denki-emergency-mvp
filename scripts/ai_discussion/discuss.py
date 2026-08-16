@@ -21,6 +21,10 @@ CLASSIFICATIONS = [
     "specification_change",
 ]
 
+DEFAULT_JSON_MAX_ATTEMPTS = 2
+DEFAULT_INVALID_JSON_LOG_MAX_CHARS = 4000
+SECRET_ENV_NAMES = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+
 ROUND_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -57,6 +61,22 @@ class ConfigurationError(ValueError):
     """Raised when runtime configuration is missing or invalid."""
 
 
+class ModelJSONError(RuntimeError):
+    """Raised when a model response cannot be consumed as the round JSON."""
+
+    def __init__(
+        self,
+        message: str,
+        raw_response: str,
+        usage: dict[str, int] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.raw_response = raw_response
+        self.usage = usage or {"input_tokens": 0, "output_tokens": 0}
+        self.metadata = metadata or {}
+
+
 def required_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -66,6 +86,26 @@ def required_env(name: str) -> str:
 
 def int_env(name: str, *, minimum: int = 1, maximum: int | None = None) -> int:
     raw = required_env(name)
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+    if value < minimum or (maximum is not None and value > maximum):
+        suffix = f" and at most {maximum}" if maximum is not None else ""
+        raise ConfigurationError(f"{name} must be at least {minimum}{suffix}")
+    return value
+
+
+def optional_int_env(
+    name: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
     try:
         value = int(raw)
     except ValueError as exc:
@@ -111,7 +151,10 @@ def extract_openai_text(response: dict[str, Any]) -> str:
         for content in item.get("content", []):
             if content.get("type") == "output_text" and content.get("text"):
                 return str(content["text"])
-    raise RuntimeError("OpenAI response did not contain output_text")
+    raise ModelJSONError(
+        "OpenAI response did not contain output_text",
+        json.dumps(response, ensure_ascii=False),
+    )
 
 
 def extract_anthropic_text(response: dict[str, Any]) -> str:
@@ -121,11 +164,15 @@ def extract_anthropic_text(response: dict[str, Any]) -> str:
         if block.get("type") == "text" and block.get("text")
     ]
     if not texts:
-        raise RuntimeError("Anthropic response did not contain a text block")
+        raise ModelJSONError(
+            "Anthropic response did not contain a text block",
+            json.dumps(response, ensure_ascii=False),
+        )
     return "\n".join(texts)
 
 
 def parse_json_text(text: str) -> dict[str, Any]:
+    raw_response = text
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -137,10 +184,112 @@ def parse_json_text(text: str) -> dict[str, Any]:
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Discussion model returned invalid JSON") from exc
+        raise ModelJSONError(
+            f"Discussion model returned invalid JSON at line {exc.lineno} column {exc.colno}",
+            raw_response,
+        ) from exc
     if not isinstance(value, dict):
-        raise RuntimeError("Discussion model returned a non-object JSON value")
+        raise ModelJSONError("Discussion model returned a non-object JSON value", raw_response)
     return value
+
+
+def redact_secrets(text: str) -> str:
+    redacted = text
+    for name in SECRET_ENV_NAMES:
+        secret = os.environ.get(name, "").strip()
+        if secret:
+            redacted = redacted.replace(secret, "***REDACTED***")
+    return redacted
+
+
+def log_model_json_failure(
+    error: ModelJSONError,
+    *,
+    provider: str,
+    model: str,
+    round_number: int,
+    attempt: int,
+    max_attempts: int,
+    max_chars: int,
+) -> None:
+    raw_response = redact_secrets(error.raw_response)
+    logged_response = raw_response[:max_chars]
+    event = {
+        "event": "discussion_model_json_failure",
+        "provider": provider,
+        "model": model,
+        "round": round_number,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "error": str(error),
+        "input_tokens": int(error.usage.get("input_tokens", 0)),
+        "output_tokens": int(error.usage.get("output_tokens", 0)),
+        "response_metadata": error.metadata,
+        "raw_response_chars": len(raw_response),
+        "raw_response_truncated": len(raw_response) > max_chars,
+        "raw_response": logged_response,
+    }
+    # Keep the untrusted model output JSON-escaped on one line so it cannot be
+    # interpreted as a GitHub Actions workflow command.
+    print(json.dumps(event, ensure_ascii=False), file=sys.stderr)
+
+
+def call_with_json_retry(
+    caller: Callable[[str, str, int, str], tuple[dict[str, Any], dict[str, int]]],
+    *,
+    prompt: str,
+    model: str,
+    max_output_tokens: int,
+    api_key: str,
+    provider: str,
+    round_number: int,
+    max_attempts: int,
+    log_max_chars: int,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    total_usage = {"input_tokens": 0, "output_tokens": 0}
+    for attempt in range(1, max_attempts + 1):
+        try:
+            value, usage = caller(prompt, model, max_output_tokens, api_key)
+        except ModelJSONError as exc:
+            for field in total_usage:
+                total_usage[field] += int(exc.usage.get(field, 0))
+            log_model_json_failure(
+                exc,
+                provider=provider,
+                model=model,
+                round_number=round_number,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                max_chars=log_max_chars,
+            )
+            if attempt == max_attempts:
+                raise RuntimeError(
+                    f"{exc} after {max_attempts} attempt(s); raw response was logged"
+                ) from exc
+            print(
+                json.dumps(
+                    {
+                        "event": "discussion_model_json_retry",
+                        "provider": provider,
+                        "model": model,
+                        "round": round_number,
+                        "next_attempt": attempt + 1,
+                        "max_attempts": max_attempts,
+                    },
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+            )
+            continue
+
+        for field in total_usage:
+            total_usage[field] += int(usage.get(field, 0))
+        return value, {
+            **total_usage,
+            "api_calls": attempt,
+            "retry_count": attempt - 1,
+        }
+    raise AssertionError("JSON retry loop exited unexpectedly")
 
 
 def validate_round(value: dict[str, Any], round_number: int) -> dict[str, Any]:
@@ -231,11 +380,21 @@ def call_openai(prompt: str, model: str, max_output_tokens: int, api_key: str) -
         },
         {"Authorization": f"Bearer {api_key}"},
     )
-    usage = response.get("usage") or {}
-    return parse_json_text(extract_openai_text(response)), {
-        "input_tokens": int(usage.get("input_tokens") or 0),
-        "output_tokens": int(usage.get("output_tokens") or 0),
+    response_usage = response.get("usage") or {}
+    usage = {
+        "input_tokens": int(response_usage.get("input_tokens") or 0),
+        "output_tokens": int(response_usage.get("output_tokens") or 0),
     }
+    try:
+        return parse_json_text(extract_openai_text(response)), usage
+    except ModelJSONError as exc:
+        exc.usage = usage
+        exc.metadata = {
+            "response_id": response.get("id"),
+            "status": response.get("status"),
+            "incomplete_details": response.get("incomplete_details"),
+        }
+        raise
 
 
 def call_anthropic(prompt: str, model: str, max_output_tokens: int, api_key: str) -> tuple[dict[str, Any], dict[str, int]]:
@@ -250,11 +409,21 @@ def call_anthropic(prompt: str, model: str, max_output_tokens: int, api_key: str
         },
         {"x-api-key": api_key, "anthropic-version": "2023-06-01"},
     )
-    usage = response.get("usage") or {}
-    return parse_json_text(extract_anthropic_text(response)), {
-        "input_tokens": int(usage.get("input_tokens") or 0),
-        "output_tokens": int(usage.get("output_tokens") or 0),
+    response_usage = response.get("usage") or {}
+    usage = {
+        "input_tokens": int(response_usage.get("input_tokens") or 0),
+        "output_tokens": int(response_usage.get("output_tokens") or 0),
     }
+    try:
+        return parse_json_text(extract_anthropic_text(response)), usage
+    except ModelJSONError as exc:
+        exc.usage = usage
+        exc.metadata = {
+            "response_id": response.get("id"),
+            "stop_reason": response.get("stop_reason"),
+            "stop_sequence": response.get("stop_sequence"),
+        }
+        raise
 
 
 def run_discussion(
@@ -265,10 +434,24 @@ def run_discussion(
     first_mover = routing.get("first_mover")
     if first_mover not in {"chatgpt", "claude"}:
         raise ValueError("routing.first_mover is invalid")
-    # One round is one model response (and therefore one API call). At least two
+    # One discussion round is one accepted model response and normally one API
+    # call. A malformed response may add a recovery call without advancing the
+    # round; physical calls are still recorded for cost tracking. At least two
     # rounds are required so both models participate in the first exchange.
     max_rounds = int_env("MAX_ROUNDS", minimum=2, maximum=10)
     max_output_tokens = int_env("MAX_OUTPUT_TOKENS", minimum=1)
+    json_max_attempts = optional_int_env(
+        "DISCUSSION_JSON_MAX_ATTEMPTS",
+        DEFAULT_JSON_MAX_ATTEMPTS,
+        minimum=1,
+        maximum=3,
+    )
+    invalid_json_log_max_chars = optional_int_env(
+        "INVALID_JSON_LOG_MAX_CHARS",
+        DEFAULT_INVALID_JSON_LOG_MAX_CHARS,
+        minimum=100,
+        maximum=20000,
+    )
     models = {
         "chatgpt": required_env("OPENAI_DISCUSSION_MODEL"),
         "claude": required_env("ANTHROPIC_DISCUSSION_MODEL"),
@@ -296,7 +479,18 @@ def run_discussion(
         round_number = index + 1
         speaker = order[index % 2]
         prompt = build_prompt(topic, rounds, speaker, round_number, max_rounds)
-        value, usage = callers[speaker](prompt, models[speaker], max_output_tokens, keys[speaker])
+        provider = "openai" if speaker == "chatgpt" else "anthropic"
+        value, usage = call_with_json_retry(
+            callers[speaker],
+            prompt=prompt,
+            model=models[speaker],
+            max_output_tokens=max_output_tokens,
+            api_key=keys[speaker],
+            provider=provider,
+            round_number=round_number,
+            max_attempts=json_max_attempts,
+            log_max_chars=invalid_json_log_max_chars,
+        )
         value = validate_round(value, round_number)
         round_record = {"round": round_number, "speaker": speaker, **value}
         rounds.append(round_record)
@@ -307,11 +501,13 @@ def run_discussion(
         ) / 1_000_000
         call_records.append(
             {
-                "provider": "openai" if speaker == "chatgpt" else "anthropic",
+                "provider": provider,
                 "speaker": speaker,
                 "model": models[speaker],
                 "input_tokens": int(usage.get("input_tokens", 0)),
                 "output_tokens": int(usage.get("output_tokens", 0)),
+                "api_calls": int(usage.get("api_calls", 1)),
+                "retry_count": int(usage.get("retry_count", 0)),
                 "estimated_cost_usd": round(cost, 8),
             }
         )
@@ -336,7 +532,7 @@ def run_discussion(
         "rounds": rounds,
         "unresolved_points": unresolved_points,
         "calls": call_records,
-        "api_calls": len(call_records),
+        "api_calls": sum(int(item.get("api_calls", 1)) for item in call_records),
         "estimated_cost_usd": round(sum(item["estimated_cost_usd"] for item in call_records), 8),
     }
 

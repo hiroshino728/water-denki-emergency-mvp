@@ -4,6 +4,8 @@ import json
 import os
 import sys
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -102,6 +104,29 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(value["status"], "unresolved")
         self.assertEqual(usage, {"input_tokens": 10, "output_tokens": 5})
 
+    def test_openai_invalid_json_preserves_stop_metadata_and_usage(self) -> None:
+        response = {
+            "id": "resp-test",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": '{"status":'}],
+                }
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 1000},
+        }
+        with patch.object(discuss, "post_json", return_value=response):
+            with self.assertRaises(discuss.ModelJSONError) as raised:
+                discuss.call_openai("prompt", "openai-test", 1000, "secret")
+        self.assertEqual(raised.exception.raw_response, '{"status":')
+        self.assertEqual(raised.exception.usage, {"input_tokens": 10, "output_tokens": 1000})
+        self.assertEqual(
+            raised.exception.metadata["incomplete_details"],
+            {"reason": "max_output_tokens"},
+        )
+
     def test_first_exchange_converges_after_two_api_call_rounds(self) -> None:
         speakers: list[str] = []
 
@@ -125,6 +150,120 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(result["api_calls"], 2)
         self.assertEqual(result["rounds"][0]["status"], "unresolved")
         self.assertEqual(result["rounds"][1]["status"], "converged")
+
+    def test_invalid_json_retries_once_and_counts_failed_usage(self) -> None:
+        chatgpt_attempts = 0
+
+        def chatgpt(prompt: str, model: str, max_tokens: int, key: str):
+            nonlocal chatgpt_attempts
+            chatgpt_attempts += 1
+            if chatgpt_attempts == 1:
+                raise discuss.ModelJSONError(
+                    "Discussion model returned invalid JSON at line 1 column 8",
+                    '{"status":',
+                    {"input_tokens": 7, "output_tokens": 3},
+                )
+            return round_value("unresolved"), {"input_tokens": 10, "output_tokens": 5}
+
+        def claude(prompt: str, model: str, max_tokens: int, key: str):
+            return round_value("converged"), {"input_tokens": 20, "output_tokens": 10}
+
+        with patch.dict(os.environ, DISCUSSION_ENV, clear=True), redirect_stderr(StringIO()):
+            result = discuss.run_discussion(
+                "再試行する議題",
+                {"first_mover": "chatgpt"},
+                {"chatgpt": chatgpt, "claude": claude},
+            )
+
+        self.assertEqual(chatgpt_attempts, 2)
+        self.assertEqual(result["rounds_completed"], 2)
+        self.assertEqual(result["api_calls"], 3)
+        self.assertEqual(result["calls"][0]["api_calls"], 2)
+        self.assertEqual(result["calls"][0]["retry_count"], 1)
+        self.assertEqual(result["calls"][0]["input_tokens"], 17)
+        self.assertEqual(result["calls"][0]["output_tokens"], 8)
+        self.assertEqual(result["estimated_cost_usd"], 0.000133)
+
+    def test_invalid_json_log_is_single_line_truncated_and_secret_redacted(self) -> None:
+        secret = "test-openai-secret"
+        raw_response = f'{{"position":"{secret}"\n::warning::untrusted'
+
+        def invalid(prompt: str, model: str, max_tokens: int, key: str):
+            raise discuss.ModelJSONError(
+                "Discussion model returned invalid JSON at line 1 column 30",
+                raw_response,
+                {"input_tokens": 11, "output_tokens": 12},
+            )
+
+        stderr = StringIO()
+        with patch.dict(os.environ, {"OPENAI_API_KEY": secret}, clear=True), redirect_stderr(stderr):
+            with self.assertRaisesRegex(RuntimeError, "after 1 attempt"):
+                discuss.call_with_json_retry(
+                    invalid,
+                    prompt="prompt",
+                    model="openai-test-model",
+                    max_output_tokens=1000,
+                    api_key=secret,
+                    provider="openai",
+                    round_number=1,
+                    max_attempts=1,
+                    log_max_chars=40,
+                )
+
+        log_lines = stderr.getvalue().splitlines()
+        self.assertEqual(len(log_lines), 1)
+        self.assertNotIn(secret, stderr.getvalue())
+        event = json.loads(log_lines[0])
+        self.assertEqual(event["event"], "discussion_model_json_failure")
+        self.assertTrue(event["raw_response_truncated"])
+        self.assertIn("***REDACTED***", event["raw_response"])
+        self.assertEqual(event["input_tokens"], 11)
+        self.assertEqual(event["output_tokens"], 12)
+
+    def test_invalid_json_stops_after_configured_attempts(self) -> None:
+        attempts = 0
+
+        def invalid(prompt: str, model: str, max_tokens: int, key: str):
+            nonlocal attempts
+            attempts += 1
+            raise discuss.ModelJSONError("Discussion model returned invalid JSON", "not-json")
+
+        with redirect_stderr(StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "after 2 attempt"):
+                discuss.call_with_json_retry(
+                    invalid,
+                    prompt="prompt",
+                    model="anthropic-test-model",
+                    max_output_tokens=1000,
+                    api_key="secret",
+                    provider="anthropic",
+                    round_number=2,
+                    max_attempts=2,
+                    log_max_chars=100,
+                )
+        self.assertEqual(attempts, 2)
+
+    def test_http_error_is_not_retried(self) -> None:
+        attempts = 0
+
+        def http_error(prompt: str, model: str, max_tokens: int, key: str):
+            nonlocal attempts
+            attempts += 1
+            raise RuntimeError("Model API returned HTTP 429")
+
+        with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+            discuss.call_with_json_retry(
+                http_error,
+                prompt="prompt",
+                model="openai-test-model",
+                max_output_tokens=1000,
+                api_key="secret",
+                provider="openai",
+                round_number=1,
+                max_attempts=2,
+                log_max_chars=100,
+            )
+        self.assertEqual(attempts, 1)
 
     def test_rejects_max_rounds_below_one_two_model_exchange(self) -> None:
         env = {**DISCUSSION_ENV, "MAX_ROUNDS": "1"}
@@ -212,6 +351,32 @@ class ClassificationAndBuilderTests(unittest.TestCase):
             implementation["labels"],
             ["status:todo", "ready:true", "owner:unassigned", "execution:tbd"],
         )
+
+    def test_summary_counts_physical_retry_calls(self) -> None:
+        routing = {
+            "api_calls": 1,
+            "usage": {"input_tokens": 2, "output_tokens": 1},
+            "model": "router-model",
+            "estimated_cost_usd": 0.00001,
+        }
+        discussion = {
+            "status": "converged",
+            "calls": [
+                {
+                    "provider": "openai",
+                    "speaker": "chatgpt",
+                    "model": "discussion-model",
+                    "api_calls": 2,
+                    "retry_count": 1,
+                    "input_tokens": 20,
+                    "output_tokens": 10,
+                    "estimated_cost_usd": 0.00004,
+                }
+            ],
+        }
+        summary = issue_builder.build_summary(routing, discussion)
+        self.assertIn("- API calls: `3`", summary)
+        self.assertIn("| chatgpt | openai | `discussion-model` | 2 | 1 |", summary)
 
 
 if __name__ == "__main__":
