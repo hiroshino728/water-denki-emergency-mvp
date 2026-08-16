@@ -92,7 +92,7 @@ jobs:
 
             const body = pull.body || '';
             const decisionMatch = body.match(
-              /^## Does this PR change a Decision?[\t ]*\r?\n[\t ]*(Yes|No)[\t ]*(?:\r?\n|$)/im,
+              /^## Does this PR change a Decision?[\t ]*\r?\n(?:[\t ]*\r?\n)?[\t ]*(Yes|No)[\t ]*(?:\r?\n|$)/im,
             );
             record(
               '3.1 Decision is No',
