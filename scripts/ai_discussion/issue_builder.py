@@ -256,29 +256,33 @@ def build_summary(routing: dict[str, Any], discussion: dict[str, Any]) -> str:
                 "model": routing.get("model"),
                 "input_tokens": int(router_usage.get("input_tokens") or 0),
                 "output_tokens": int(router_usage.get("output_tokens") or 0),
+                "api_calls": int(routing.get("api_calls") or 0),
+                "retry_count": 0,
                 "estimated_cost_usd": float(routing.get("estimated_cost_usd") or 0),
             }
         )
     records.extend(discussion.get("calls", []))
     total_input = sum(int(record.get("input_tokens") or 0) for record in records)
     total_output = sum(int(record.get("output_tokens") or 0) for record in records)
+    total_api_calls = sum(int(record.get("api_calls") or 1) for record in records)
     total_cost = sum(float(record.get("estimated_cost_usd") or 0) for record in records)
     rows = [
         f"| {record.get('speaker')} | {record.get('provider')} | `{record.get('model')}` | "
+        f"{int(record.get('api_calls') or 1)} | {int(record.get('retry_count') or 0)} | "
         f"{record.get('input_tokens')} | {record.get('output_tokens')} | ${float(record.get('estimated_cost_usd') or 0):.8f} |"
         for record in records
     ]
-    rows_text = "\n".join(rows) if rows else "| forced router | none | n/a | 0 | 0 | $0.00000000 |"
+    rows_text = "\n".join(rows) if rows else "| forced router | none | n/a | 0 | 0 | 0 | 0 | $0.00000000 |"
     return f"""## AI discussion usage
 
 - Discussion status: `{discussion.get('status')}`
-- API calls: `{len(records)}`
+- API calls: `{total_api_calls}`
 - Input tokens: `{total_input}`
 - Output tokens: `{total_output}`
 - Estimated cost: `${total_cost:.8f}`
 
-| Role | Provider | Model | Input tokens | Output tokens | Estimated cost (USD) |
-|---|---|---|---:|---:|---:|
+| Role | Provider | Model | API calls | Retries | Input tokens | Output tokens | Estimated cost (USD) |
+|---|---|---|---:|---:|---:|---:|---:|
 {rows_text}
 
 Cost is calculated from actual API token usage and the repository-variable rates configured for this run.
