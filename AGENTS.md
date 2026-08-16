@@ -70,7 +70,7 @@ AIエージェントのセッションは、利用制限・クラッシュ・タ
 - PRは `.github/pull_request_template.md` のテンプレートに従い、関連Issue番号を必ず記載する(例: `Closes #23` またはレビュー段階では `Refs #23`)。
 - mainブランチにはRuleset(直接push禁止・PR経由必須)を設定している。ローカルで`git push origin main`を実行しても拒否される想定で運用する。
 - PRをマージできるのは、レビュー(人間によるレビューが基本。将来的にAI間レビューを追加する可能性はあるが、現時点では篠さんの確認を経ることを原則とする)を経た後のみ。
-- **新規ADRの追加、または既存の設計判断(Decision)を変更するPRは、内容にBubble実装が含まれていなくても、篠さんのレビュー・マージ判断を経てから反映する。** AIはPRを開くところまでを担当し、自動マージしない。
+- **新規ADRの追加、または既存の設計判断(Decision)を変更するPRは、内容にBubble実装が含まれていなくても、篠さんのレビュー・マージ判断を経てから反映する。** AIはPRを開くところまでを担当し、自動マージしない。PR作成時は `.github/pull_request_template.md` の `Does this PR change a Decision?` に `Yes` / `No` を明記し、`Yes`の場合は自動マージしない。
 - マージ後は、関連Issueの`status`を`status:review`→`status:done`に更新し、`Latest Handoff`を最終状態に更新する。
 
 ---
