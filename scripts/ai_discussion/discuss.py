@@ -181,9 +181,10 @@ def validate_round(value: dict[str, Any], round_number: int) -> dict[str, Any]:
     ):
         value["status"] = "unresolved"
         value["proposed_synthesis"] = None
+    if value["status"] == "converged" and value["unresolved_points"]:
+        value["status"] = "unresolved"
+        value["proposed_synthesis"] = None
     if value["status"] == "converged":
-        if value["unresolved_points"]:
-            raise RuntimeError("Converged round must not include unresolved_points")
         value["proposed_synthesis"] = value["proposed_synthesis"].strip()
     else:
         value["proposed_synthesis"] = None

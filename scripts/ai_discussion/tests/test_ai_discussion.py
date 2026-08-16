@@ -146,6 +146,14 @@ class DiscussionTests(unittest.TestCase):
         self.assertIsNone(value["proposed_synthesis"])
         self.assertTrue(value["unresolved_points"])
 
+    def test_converged_with_unresolved_points_continues_as_unresolved(self) -> None:
+        model_value = round_value("converged")
+        model_value["unresolved_points"] = ["導入日の確認が必要"]
+        value = discuss.validate_round(model_value, 2)
+        self.assertEqual(value["status"], "unresolved")
+        self.assertIsNone(value["proposed_synthesis"])
+        self.assertEqual(value["unresolved_points"], ["導入日の確認が必要"])
+
     def test_unresolved_runs_to_max_rounds_without_synthesis(self) -> None:
         def unresolved(prompt: str, model: str, max_tokens: int, key: str):
             return round_value("unresolved"), {"input_tokens": 1, "output_tokens": 1}
