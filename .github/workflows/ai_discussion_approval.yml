@@ -1,0 +1,209 @@
+name: AI discussion approval
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ai-discussion-approval-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  process-command:
+    if: >-
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+        (github.event.comment.body == '/approve' ||
+         startsWith(github.event.comment.body, format('/approve{0}', fromJSON('"\n"'))) ||
+         startsWith(github.event.comment.body, format('/approve{0}', fromJSON('"\r\n"'))) ||
+         github.event.comment.body == '/reject' ||
+         startsWith(github.event.comment.body, format('/reject{0}', fromJSON('"\n"'))) ||
+         startsWith(github.event.comment.body, format('/reject{0}', fromJSON('"\r\n"'))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve and validate command target
+        id: resolve
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PROPOSAL_BODY_PATH: ${{ runner.temp }}/ai-discussion-approval/proposal.md
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            if (context.payload.comment.user.login !== context.repo.owner) {
+              core.setFailed('Only the repository owner may approve or reject a proposal.');
+              return;
+            }
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const body = issue.body || '';
+            if (!body.includes('<!-- ai-discussion-proposal:v1 -->')) {
+              core.setFailed('The target Issue is not an AI Discussion proposal.');
+              return;
+            }
+            const match = body.match(/<!-- decision-classification:([a-z_]+) -->/);
+            const allowed = new Set([
+              'implementation_task', 'unresolved', 'business_decision',
+              'architecture_decision', 'specification_change',
+            ]);
+            if (!match || !allowed.has(match[1])) {
+              core.setFailed('The target Issue has no valid Decision Classification.');
+              return;
+            }
+            const commandMatch = context.payload.comment.body.match(/^\/(approve|reject)(?:\r?\n|$)/);
+            if (!commandMatch) {
+              core.setFailed('Command must be /approve or /reject on the first line.');
+              return;
+            }
+            const action = commandMatch[1];
+            fs.mkdirSync(path.dirname(process.env.PROPOSAL_BODY_PATH), { recursive: true });
+            fs.writeFileSync(process.env.PROPOSAL_BODY_PATH, body);
+            core.setOutput('action', action);
+            core.setOutput('classification', match[1]);
+            core.setOutput('issue_number', String(issue.number));
+
+      - name: Build implementation Issue payload
+        if: >-
+          steps.resolve.outputs.action == 'approve' &&
+          steps.resolve.outputs.classification == 'implementation_task'
+        env:
+          SOURCE_ISSUE: ${{ steps.resolve.outputs.issue_number }}
+          PROPOSAL_BODY_PATH: ${{ runner.temp }}/ai-discussion-approval/proposal.md
+          IMPLEMENTATION_PATH: ${{ runner.temp }}/ai-discussion-approval/implementation.json
+        run: >-
+          python3 scripts/ai_discussion/issue_builder.py implementation
+          --proposal-body "$PROPOSAL_BODY_PATH"
+          --source-issue "$SOURCE_ISSUE"
+          --output "$IMPLEMENTATION_PATH"
+
+      - name: Apply approval or rejection
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          ACTION: ${{ steps.resolve.outputs.action }}
+          CLASSIFICATION: ${{ steps.resolve.outputs.classification }}
+          IMPLEMENTATION_PATH: ${{ runner.temp }}/ai-discussion-approval/implementation.json
+        with:
+          script: |
+            const fs = require('node:fs');
+            const action = process.env.ACTION;
+            const classification = process.env.CLASSIFICATION;
+            const commentId = context.payload.comment.id;
+            const commandMarker = `<!-- ai-discussion-command:${commentId}:${action} -->`;
+            const resultMarker = `<!-- ai-discussion-command-result:${commentId} -->`;
+
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            if ((issue.body || '').includes(commandMarker)) {
+              core.notice('This command was already processed.');
+              return;
+            }
+            if (issue.state !== 'open') {
+              core.setFailed('Only an open Decision Proposal can be processed.');
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              per_page: 100,
+            });
+            const priorResult = comments.find(comment => (comment.body || '').includes(resultMarker));
+            const ensureResultComment = async body => {
+              if (!priorResult) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `${resultMarker}\n${body}`,
+                });
+              }
+            };
+            const markIssue = async (labels, state = 'open') => {
+              const managedPrefixes = ['status:', 'ready:', 'owner:', 'execution:'];
+              const unrelatedLabels = (issue.labels || [])
+                .map(label => typeof label === 'string' ? label : label.name)
+                .filter(name => name && !managedPrefixes.some(prefix => name.startsWith(prefix)));
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `${issue.body || ''}\n\n${commandMarker}\n`,
+                labels: [...unrelatedLabels, ...labels],
+                state,
+              });
+            };
+
+            if (action === 'reject') {
+              const lines = context.payload.comment.body.split(/\r?\n/).slice(1);
+              const reason = lines.join('\n').trim();
+              const detail = reason
+                ? `却下理由:\n\n${reason}`
+                : `CEOの \`/reject\` コメントにより却下されました。`;
+              await ensureResultComment(`${detail}\n\n後続Issueは生成しません。`);
+              await markIssue(
+                ['status:hold', 'ready:false', 'owner:human', 'execution:tbd'],
+                'closed',
+              );
+              return;
+            }
+
+            if (classification === 'unresolved') {
+              await ensureResultComment(
+                'このIssueは非収束のため承認できません。追加討議または直接指示をお願いします。',
+              );
+              await markIssue(['status:hold', 'ready:false', 'owner:human', 'execution:tbd']);
+              return;
+            }
+
+            if (classification !== 'implementation_task') {
+              await ensureResultComment(
+                '設計書またはADRの更新が必要です。Bubble変更・実装Issue化の前に、' +
+                'docsリポジトリ側の更新Issueを別途起票してください。',
+              );
+              await markIssue(['status:todo', 'ready:false', 'owner:human', 'execution:tbd']);
+              return;
+            }
+
+            const payload = JSON.parse(fs.readFileSync(process.env.IMPLEMENTATION_PATH, 'utf8'));
+            const sourceMarker = `<!-- ai-discussion-source:#${issue.number} -->`;
+            const allIssues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              per_page: 100,
+            });
+            let implementation = allIssues.find(candidate =>
+              !candidate.pull_request && (candidate.body || '').includes(sourceMarker),
+            );
+            if (!implementation) {
+              ({ data: implementation } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: payload.title,
+                body: payload.body,
+                labels: payload.labels,
+              }));
+            }
+            await ensureResultComment(
+              `承認済みの実装Issue #${implementation.number} を生成しました。`,
+            );
+            await markIssue(['status:done', 'ready:false', 'owner:human', 'execution:tbd'], 'closed');
+            core.notice(`Implementation Issue: ${implementation.html_url}`);

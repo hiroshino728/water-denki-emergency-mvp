@@ -1,0 +1,139 @@
+name: AI discussion pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: Topic for the Claude / ChatGPT discussion
+        required: true
+        type: string
+      force_first_mover:
+        description: Override the first speaker, or use automatic routing
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - chatgpt
+          - claude
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ai-discussion-pipeline
+  cancel-in-progress: false
+
+jobs:
+  discuss-and-propose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ROUTER_MODEL: ${{ vars.ROUTER_MODEL }}
+      OPENAI_DISCUSSION_MODEL: ${{ vars.OPENAI_DISCUSSION_MODEL }}
+      ANTHROPIC_DISCUSSION_MODEL: ${{ vars.ANTHROPIC_DISCUSSION_MODEL }}
+      MAX_OUTPUT_TOKENS: ${{ vars.MAX_OUTPUT_TOKENS }}
+      MAX_ROUNDS: ${{ vars.MAX_ROUNDS || '3' }}
+      ROUTER_INPUT_USD_PER_MTOK: ${{ vars.ROUTER_INPUT_USD_PER_MTOK }}
+      ROUTER_OUTPUT_USD_PER_MTOK: ${{ vars.ROUTER_OUTPUT_USD_PER_MTOK }}
+      OPENAI_DISCUSSION_INPUT_USD_PER_MTOK: ${{ vars.OPENAI_DISCUSSION_INPUT_USD_PER_MTOK }}
+      OPENAI_DISCUSSION_OUTPUT_USD_PER_MTOK: ${{ vars.OPENAI_DISCUSSION_OUTPUT_USD_PER_MTOK }}
+      ANTHROPIC_DISCUSSION_INPUT_USD_PER_MTOK: ${{ vars.ANTHROPIC_DISCUSSION_INPUT_USD_PER_MTOK }}
+      ANTHROPIC_DISCUSSION_OUTPUT_USD_PER_MTOK: ${{ vars.ANTHROPIC_DISCUSSION_OUTPUT_USD_PER_MTOK }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      RUN_DIR: ${{ github.workspace }}/.tmp/ai-discussion
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Validate secrets and configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            OPENAI_API_KEY ANTHROPIC_API_KEY ROUTER_MODEL
+            OPENAI_DISCUSSION_MODEL ANTHROPIC_DISCUSSION_MODEL
+            MAX_OUTPUT_TOKENS MAX_ROUNDS
+            ROUTER_INPUT_USD_PER_MTOK ROUTER_OUTPUT_USD_PER_MTOK
+            OPENAI_DISCUSSION_INPUT_USD_PER_MTOK OPENAI_DISCUSSION_OUTPUT_USD_PER_MTOK
+            ANTHROPIC_DISCUSSION_INPUT_USD_PER_MTOK ANTHROPIC_DISCUSSION_OUTPUT_USD_PER_MTOK
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "Missing required Actions secrets or variables: ${missing[*]}" >&2
+            echo "No secret values were printed." >&2
+            exit 1
+          fi
+          mkdir -p "$RUN_DIR"
+
+      - name: Route first speaker
+        env:
+          TOPIC: ${{ inputs.topic }}
+          FORCE_FIRST_MOVER: ${{ inputs.force_first_mover }}
+        run: >-
+          python3 scripts/ai_discussion/router.py
+          --topic "$TOPIC"
+          --force-first-mover "$FORCE_FIRST_MOVER"
+          --output "$RUN_DIR/routing.json"
+
+      - name: Run alternating discussion
+        env:
+          TOPIC: ${{ inputs.topic }}
+        run: >-
+          python3 scripts/ai_discussion/discuss.py
+          --topic "$TOPIC"
+          --routing "$RUN_DIR/routing.json"
+          --output "$RUN_DIR/discussion.json"
+
+      - name: Classify decision path
+        run: >-
+          python3 scripts/ai_discussion/classify.py
+          --discussion "$RUN_DIR/discussion.json"
+          --output "$RUN_DIR/classification.json"
+
+      - name: Build Decision Proposal Issue
+        env:
+          TOPIC: ${{ inputs.topic }}
+        run: >-
+          python3 scripts/ai_discussion/issue_builder.py proposal
+          --topic "$TOPIC"
+          --routing "$RUN_DIR/routing.json"
+          --discussion "$RUN_DIR/discussion.json"
+          --classification "$RUN_DIR/classification.json"
+          --output "$RUN_DIR/proposal.json"
+
+      - name: Build usage and cost summary
+        run: |
+          python3 scripts/ai_discussion/issue_builder.py summary \
+            --routing "$RUN_DIR/routing.json" \
+            --discussion "$RUN_DIR/discussion.json" \
+            --output "$RUN_DIR/summary.md"
+          cp "$RUN_DIR/summary.md" "$GITHUB_STEP_SUMMARY"
+
+      - name: Create Decision Proposal Issue
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PROPOSAL_PATH: ${{ runner.temp }}/ai-discussion/proposal.json
+        with:
+          script: |
+            const fs = require('node:fs');
+            const proposal = JSON.parse(fs.readFileSync(process.env.PROPOSAL_PATH, 'utf8'));
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: proposal.title,
+              body: proposal.body,
+              labels: proposal.labels,
+            });
+            core.notice(`Created Decision Proposal #${issue.number}`);
+            await core.summary.addLink(`Decision Proposal #${issue.number}`, issue.html_url).write();
