@@ -43,7 +43,7 @@ jobs:
       ANTHROPIC_DISCUSSION_OUTPUT_USD_PER_MTOK: ${{ vars.ANTHROPIC_DISCUSSION_OUTPUT_USD_PER_MTOK }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      RUN_DIR: ${{ runner.temp }}/ai-discussion
+      RUN_DIR: ${{ github.workspace }}/.tmp/ai-discussion
 
     steps:
       - name: Check out repository
