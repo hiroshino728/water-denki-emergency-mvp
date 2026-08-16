@@ -73,6 +73,11 @@ AIエージェントのセッションは、利用制限・クラッシュ・タ
 - **新規ADRの追加、または既存の設計判断(Decision)を変更するPRは、内容にBubble実装が含まれていなくても、篠さんのレビュー・マージ判断を経てから反映する。** AIはPRを開くところまでを担当し、自動マージしない。PR作成時は `.github/pull_request_template.md` の `Does this PR change a Decision?` に `Yes` / `No` を明記し、`Yes`の場合は自動マージしない。
 - マージ後は、関連Issueの`status`を`status:review`→`status:done`に更新し、`Latest Handoff`を最終状態に更新する。
 
+**PRのマージ方式はTier 1(自動マージ)とTier 2(篠さんの承認必須)に分かれる。**
+
+- **Tier 2(原則・デフォルト)**: 上記の手順(レビュー・篠さんの確認を経てマージ)。`Does this PR change a Decision?`が`Yes`のPR、ADR新規・変更、Gate判定に関わるPR、Production変更を伴うPR、法務・契約・金銭・責任分界に関わるPRは常にTier 2とする。
+- **Tier 1(自動マージ、限定的)**: docs submodule参照のみを更新するPR等、機械的で安全性を検証可能な種別に限り、`.github/workflows/auto-merge-docs-submodule-sync.yml`による自動マージを許可する。判定条件・fail-closed設計は`docs/ai_collaboration_rules_v2.1.md`第8節を参照。Tier 1の対象範囲拡張には、都度篠さんの承認を要する。
+
 ---
 
 ## 4. Claude CodeとCodexの役割分担について

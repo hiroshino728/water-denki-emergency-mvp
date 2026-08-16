@@ -1,0 +1,352 @@
+name: auto-merge-docs-submodule-sync
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to evaluate in dry-run mode
+        required: true
+        type: number
+
+# Stage 1 bootstrap: this workflow intentionally has no merge step and never
+# calls the pull-request merge API. It only evaluates, labels, and comments.
+jobs:
+  evaluate-dry-run:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # PR labels/comments use Issues endpoints, but GitHub's API requires
+      # pull_requests: write as well as issues: write for these PR mutations.
+      pull-requests: write
+      issues: write
+    concurrency:
+      group: auto-merge-${{ github.event.pull_request.number || inputs.pr_number }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Resolve pull request context
+        id: pr
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_NUMBER_INPUT: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const rawNumber = context.eventName === 'workflow_dispatch'
+              ? process.env.PR_NUMBER_INPUT
+              : context.payload.pull_request?.number;
+            const prNumber = Number(rawNumber);
+            if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
+              core.setFailed(`Invalid pr_number: ${rawNumber}`);
+              return;
+            }
+
+            const { data: pull } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            core.setOutput('number', String(prNumber));
+            core.setOutput('head_sha', pull.head.sha);
+
+      - name: Check out pull request head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: refs/pull/${{ steps.pr.outputs.number }}/head
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Evaluate Tier 1 conditions and record dry-run result
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        with:
+          script: |
+            const { execFileSync } = require('node:child_process');
+            const prNumber = Number(process.env.PR_NUMBER);
+            const expectedRepository = 'hiroshino728/water-denki-emergency-mvp';
+            const failures = [];
+            const checks = [];
+            const record = (name, passed, detail) => {
+              checks.push({ name, passed, detail });
+              if (!passed) failures.push(`${name}: ${detail}`);
+            };
+
+            let pull;
+            try {
+              // GitHub may initially return mergeable=null while calculating it.
+              for (let attempt = 1; attempt <= 5; attempt += 1) {
+                ({ data: pull } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                }));
+                if (pull.mergeable !== null) break;
+                if (attempt < 5) await new Promise(resolve => setTimeout(resolve, 3000));
+              }
+            } catch (error) {
+              core.setFailed(`Unable to fetch PR #${prNumber}: ${error.message}`);
+              return;
+            }
+
+            const body = pull.body || '';
+            const decisionMatch = body.match(
+              /^## Does this PR change a Decision\?[\t ]*\r?\n(?:[\t ]*\r?\n)?[\t ]*(Yes|No)[\t ]*(?:\r?\n|$)/im,
+            );
+            record(
+              '3.1 Decision is No',
+              Boolean(decisionMatch && decisionMatch[1].toLowerCase() === 'no'),
+              decisionMatch ? `Decision: ${decisionMatch[1]}` : 'strict Decision section not found',
+            );
+
+            let files = [];
+            try {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                per_page: 100,
+              });
+              record(
+                '3.2 API diff is docs gitlink only',
+                files.length === 1 && files[0].filename === 'docs',
+                `files=[${files.map(file => file.filename).join(', ')}]`,
+              );
+            } catch (error) {
+              record('3.2 API diff is docs gitlink only', false, `API error: ${error.message}`);
+            }
+
+            record('3.3 PR is not draft', pull.draft === false, `draft=${pull.draft}`);
+            record(
+              '3.4 PR is mergeable',
+              pull.mergeable === true && ['clean', 'unstable'].includes(pull.mergeable_state),
+              `mergeable=${pull.mergeable}, state=${pull.mergeable_state}`,
+            );
+
+            try {
+              const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: pull.head.sha,
+                per_page: 100,
+              });
+              // A workflow sees its own in-progress check run. Exclude only this
+              // exact run; every other check must have concluded successfully.
+              const otherRuns = checkRuns.filter(run =>
+                !(run.name === 'evaluate-dry-run' &&
+                  String(run.details_url || '').includes(`/actions/runs/${context.runId}`)),
+              );
+              const badRuns = otherRuns.filter(run =>
+                run.status !== 'completed' || run.conclusion !== 'success',
+              );
+              const { data: combinedStatus } = await github.rest.repos.getCombinedStatusForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: pull.head.sha,
+              });
+              const statusesPass = combinedStatus.total_count === 0 || combinedStatus.state === 'success';
+              record(
+                '3.5 CI is absent or successful',
+                badRuns.length === 0 && statusesPass,
+                `other_check_runs=${otherRuns.length}, bad=${badRuns.map(run => run.name).join(',') || 'none'}, commit_status=${combinedStatus.state}, statuses=${combinedStatus.total_count}`,
+              );
+            } catch (error) {
+              record('3.5 CI is absent or successful', false, `API error: ${error.message}`);
+            }
+
+            const changedPaths = files.map(file => file.filename);
+            const bubblePaths = changedPaths.filter(path => path.toLowerCase().includes('bubble'));
+            record(
+              '3.6 no Bubble Production paths',
+              bubblePaths.length === 0,
+              `matches=[${bubblePaths.join(', ')}]`,
+            );
+            const workflowPaths = changedPaths.filter(path => path.startsWith('.github/workflows/'));
+            record(
+              '3.7 no workflow changes',
+              workflowPaths.length === 0,
+              `matches=[${workflowPaths.join(', ')}]`,
+            );
+            record(
+              '3.7 repository is expected',
+              context.repo.owner + '/' + context.repo.repo === expectedRepository,
+              `repository=${context.repo.owner}/${context.repo.repo}`,
+            );
+            record('3.7 base is main', pull.base.ref === 'main', `base=${pull.base.ref}`);
+            record(
+              '3.7 head repository is same repository',
+              pull.head.repo?.full_name === expectedRepository,
+              `head_repository=${pull.head.repo?.full_name || 'unknown'}`,
+            );
+            record(
+              '3.7 evaluated SHA matches checked-out SHA',
+              pull.head.sha === process.env.EXPECTED_HEAD_SHA,
+              `api=${pull.head.sha}, resolved=${process.env.EXPECTED_HEAD_SHA}`,
+            );
+
+            try {
+              execFileSync('git', ['fetch', '--no-tags', 'origin', 'main'], { stdio: 'pipe' });
+              const names = execFileSync(
+                'git', ['diff', '--name-only', 'origin/main...HEAD'], { encoding: 'utf8' },
+              ).trim().split('\n').filter(Boolean);
+              record(
+                '3.2 local diff is docs only',
+                names.length === 1 && names[0] === 'docs',
+                `files=[${names.join(', ')}]`,
+              );
+
+              const raw = execFileSync(
+                'git', ['diff', '--raw', 'origin/main...HEAD', '--', 'docs'], { encoding: 'utf8' },
+              ).trim();
+              const gitlinkMode = /^:160000 160000 [0-9a-f]+ [0-9a-f]+ M\tdocs$/m.test(raw);
+              const submoduleDiff = execFileSync(
+                'git', ['diff', '--submodule=short', 'origin/main...HEAD', '--', 'docs'], { encoding: 'utf8' },
+              );
+              const commitLines = submoduleDiff.match(/^[+-]Subproject commit [0-9a-f]+$/gm) || [];
+              record(
+                '3.2 docs change is a gitlink update',
+                gitlinkMode && commitLines.length === 2,
+                `gitlink_mode=${gitlinkMode}, subproject_lines=${commitLines.length}`,
+              );
+            } catch (error) {
+              record('3.2 local git verification', false, error.message);
+            }
+
+            const eligible = failures.length === 0;
+            const marker = '<!-- docs-submodule-auto-merge-dry-run -->';
+            const table = checks.map(check =>
+              `| ${check.passed ? 'PASS' : 'FAIL'} | ${check.name} | ${String(check.detail).replaceAll('|', '\\|')} |`,
+            ).join('\n');
+            const resultBody = `${marker}\n## Docs submodule auto-merge dry-run\n\n` +
+              `Result: **${eligible ? 'would merge' : 'needs human review'}**\n\n` +
+              `Stage 1 is dry-run-only: no merge API was called.\n\n` +
+              `| Result | Check | Detail |\n|---|---|---|\n${table}`;
+
+            if (!eligible) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'needs-human-review',
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'needs-human-review',
+                  color: 'B60205',
+                  description: '自動判定条件を満たさず、人間による確認が必要',
+                }).catch(createError => {
+                  // Another PR may create this repository-wide label between
+                  // getLabel and createLabel. Treat only "already exists" as safe.
+                  if (createError.status !== 422) throw createError;
+                });
+              }
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                labels: ['needs-human-review'],
+              });
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            const previous = comments.find(comment =>
+              comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
+            );
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: previous.id,
+                body: resultBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: resultBody,
+              });
+            }
+
+            await core.summary
+              .addHeading('Docs submodule auto-merge dry-run')
+              .addRaw(resultBody.replace(marker, ''))
+              .write();
+            core.info(eligible ? 'would merge' : `needs human review: ${failures.join('; ')}`);
+
+      - name: Escalate unexpected evaluator failure
+        if: failure() && steps.pr.outputs.number != ''
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER);
+            const marker = '<!-- docs-submodule-auto-merge-error -->';
+            const body = `${marker}\n## Docs submodule auto-merge escalation\n\n` +
+              `The evaluator stopped unexpectedly and could not produce a complete result. ` +
+              `No merge API was called. Review the failed Actions run before proceeding.`;
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'needs-human-review',
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'needs-human-review',
+                color: 'B60205',
+                description: '自動判定条件を満たさず、人間による確認が必要',
+              }).catch(createError => {
+                if (createError.status !== 422) throw createError;
+              });
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              labels: ['needs-human-review'],
+            });
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            const previous = comments.find(comment =>
+              comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
+            );
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
