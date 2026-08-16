@@ -2,7 +2,7 @@ name: auto-merge-docs-submodule-sync
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -20,7 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      # PR labels/comments use Issues endpoints, but GitHub's API requires
+      # pull_requests: write as well as issues: write for these PR mutations.
+      pull-requests: write
       issues: write
     concurrency:
       group: auto-merge-${{ github.event.pull_request.number || inputs.pr_number }}
@@ -284,3 +286,67 @@ jobs:
               .addRaw(resultBody.replace(marker, ''))
               .write();
             core.info(eligible ? 'would merge' : `needs human review: ${failures.join('; ')}`);
+
+      - name: Escalate unexpected evaluator failure
+        if: failure() && steps.pr.outputs.number != ''
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER);
+            const marker = '<!-- docs-submodule-auto-merge-error -->';
+            const body = `${marker}\n## Docs submodule auto-merge escalation\n\n` +
+              `The evaluator stopped unexpectedly and could not produce a complete result. ` +
+              `No merge API was called. Review the failed Actions run before proceeding.`;
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'needs-human-review',
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'needs-human-review',
+                color: 'B60205',
+                description: '自動判定条件を満たさず、人間による確認が必要',
+              }).catch(createError => {
+                if (createError.status !== 422) throw createError;
+              });
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              labels: ['needs-human-review'],
+            });
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            const previous = comments.find(comment =>
+              comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
+            );
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
