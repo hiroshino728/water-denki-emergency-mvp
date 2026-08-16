@@ -19,8 +19,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
       issues: write
     concurrency:
       group: auto-merge-${{ github.event.pull_request.number || inputs.pr_number }}
@@ -30,10 +30,12 @@ jobs:
       - name: Resolve pull request context
         id: pr
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         with:
           script: |
             const rawNumber = context.eventName === 'workflow_dispatch'
-              ? '${{ inputs.pr_number }}'
+              ? process.env.PR_NUMBER_INPUT
               : context.payload.pull_request?.number;
             const prNumber = Number(rawNumber);
             if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
@@ -134,7 +136,8 @@ jobs:
               // A workflow sees its own in-progress check run. Exclude only this
               // exact run; every other check must have concluded successfully.
               const otherRuns = checkRuns.filter(run =>
-                !String(run.details_url || '').includes(`/actions/runs/${context.runId}`),
+                !(run.name === 'evaluate-dry-run' &&
+                  String(run.details_url || '').includes(`/actions/runs/${context.runId}`)),
               );
               const badRuns = otherRuns.filter(run =>
                 run.status !== 'completed' || run.conclusion !== 'success',
@@ -237,6 +240,10 @@ jobs:
                   name: 'needs-human-review',
                   color: 'B60205',
                   description: '自動判定条件を満たさず、人間による確認が必要',
+                }).catch(createError => {
+                  // Another PR may create this repository-wide label between
+                  // getLabel and createLabel. Treat only "already exists" as safe.
+                  if (createError.status !== 422) throw createError;
                 });
               }
               await github.rest.issues.addLabels({
