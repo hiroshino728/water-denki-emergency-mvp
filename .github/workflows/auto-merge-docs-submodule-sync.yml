@@ -13,7 +13,7 @@ on:
 # Stage 2: Tier 1 eligible docs gitlink-only pull requests are merged after all
 # fail-closed checks pass. Every other pull request is escalated for review.
 jobs:
-  evaluate-dry-run:
+  evaluate-and-merge:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.head.repo.full_name == github.repository
@@ -68,7 +68,7 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         with:
           script: |
-            const { execFileSync } = require('node:child_process');
+            const { execFileSync, spawnSync } = require('node:child_process');
             const prNumber = Number(process.env.PR_NUMBER);
             const expectedRepository = 'hiroshino728/water-denki-emergency-mvp';
             const failures = [];
@@ -139,10 +139,14 @@ jobs:
               // A workflow sees its own in-progress check run. Exclude only this
               // exact run; every other check must have concluded successfully.
               const otherRuns = checkRuns.filter(run =>
-                !(run.name === 'evaluate-dry-run' &&
-                  String(run.details_url || '').includes(`/actions/runs/${context.runId}`)),
+                !String(run.details_url || '').includes(`/actions/runs/${context.runId}`),
               );
-              const badRuns = otherRuns.filter(run =>
+              const latestByName = new Map();
+              for (const run of otherRuns.sort((a, b) => b.id - a.id)) {
+                if (!latestByName.has(run.name)) latestByName.set(run.name, run);
+              }
+              const latestRuns = [...latestByName.values()];
+              const badRuns = latestRuns.filter(run =>
                 run.status !== 'completed' || run.conclusion !== 'success',
               );
               const { data: combinedStatus } = await github.rest.repos.getCombinedStatusForRef({
@@ -154,7 +158,7 @@ jobs:
               record(
                 '3.5 CI is absent or successful',
                 badRuns.length === 0 && statusesPass,
-                `other_check_runs=${otherRuns.length}, bad=${badRuns.map(run => run.name).join(',') || 'none'}, commit_status=${combinedStatus.state}, statuses=${combinedStatus.total_count}`,
+                `latest_other_check_runs=${latestRuns.length}, bad=${badRuns.map(run => run.name).join(',') || 'none'}, commit_status=${combinedStatus.state}, statuses=${combinedStatus.total_count}`,
               );
             } catch (error) {
               record('3.5 CI is absent or successful', false, `API error: ${error.message}`);
@@ -213,6 +217,15 @@ jobs:
                 '3.2 docs change is a gitlink update',
                 gitlinkMode && commitLines.length === 2,
                 `gitlink_mode=${gitlinkMode}, subproject_lines=${commitLines.length}`,
+              );
+              const workflowMatchesMain = spawnSync(
+                'git',
+                ['diff', '--quiet', 'origin/main', '--', '.github/workflows/auto-merge-docs-submodule-sync.yml'],
+              ).status === 0;
+              record(
+                '3.8 workflow definition is active on main',
+                workflowMatchesMain,
+                `matches_origin_main=${workflowMatchesMain}`,
               );
             } catch (error) {
               record('3.2 local git verification', false, error.message);
@@ -297,14 +310,20 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         with:
           script: |
+            const { spawnSync } = require('node:child_process');
             const prNumber = Number(process.env.PR_NUMBER);
             const expectedSha = process.env.EXPECTED_HEAD_SHA;
             const expectedRepository = 'hiroshino728/water-denki-emergency-mvp';
-            const { data: pull } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber,
-            });
+            let pull;
+            for (let attempt = 1; attempt <= 5; attempt += 1) {
+              ({ data: pull } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+              }));
+              if (pull.mergeable !== null) break;
+              if (attempt < 5) await new Promise(resolve => setTimeout(resolve, 3000));
+            }
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -314,23 +333,57 @@ jobs:
             const decisionMatch = (pull.body || '').match(
               /^## Does this PR change a Decision\?[\t ]*\r?\n(?:[\t ]*\r?\n)?[\t ]*(Yes|No)[\t ]*(?:\r?\n|$)/im,
             );
+            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: pull.head.sha,
+              per_page: 100,
+            });
+            const otherRuns = checkRuns.filter(run =>
+              !String(run.details_url || '').includes(`/actions/runs/${context.runId}`),
+            );
+            const latestByName = new Map();
+            for (const run of otherRuns.sort((a, b) => b.id - a.id)) {
+              if (!latestByName.has(run.name)) latestByName.set(run.name, run);
+            }
+            const badRuns = [...latestByName.values()].filter(run =>
+              run.status !== 'completed' || run.conclusion !== 'success',
+            );
+            const { data: combinedStatus } = await github.rest.repos.getCombinedStatusForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: pull.head.sha,
+            });
+            const statusesPass = combinedStatus.total_count === 0 || combinedStatus.state === 'success';
+            const workflowMatchesMain = spawnSync(
+              'git',
+              ['diff', '--quiet', 'origin/main', '--', '.github/workflows/auto-merge-docs-submodule-sync.yml'],
+            ).status === 0;
 
             const stillEligible =
               pull.state === 'open' &&
               pull.draft === false &&
+              pull.mergeable === true &&
+              ['clean', 'unstable'].includes(pull.mergeable_state) &&
               pull.base.ref === 'main' &&
               pull.head.repo?.full_name === expectedRepository &&
               pull.head.sha === expectedSha &&
               Boolean(decisionMatch && decisionMatch[1].toLowerCase() === 'no') &&
               files.length === 1 &&
-              files[0].filename === 'docs';
+              files[0].filename === 'docs' &&
+              badRuns.length === 0 &&
+              statusesPass &&
+              workflowMatchesMain;
             if (!stillEligible) {
               core.setFailed(
                 `PR changed after evaluation: state=${pull.state}, draft=${pull.draft}, ` +
                 `base=${pull.base.ref}, head_repository=${pull.head.repo?.full_name || 'unknown'}, ` +
                 `head_sha=${pull.head.sha}, expected_sha=${expectedSha}, ` +
                 `decision=${decisionMatch?.[1] || 'missing'}, ` +
-                `files=[${files.map(file => file.filename).join(', ')}]`,
+                `files=[${files.map(file => file.filename).join(', ')}], ` +
+                `mergeable=${pull.mergeable}, mergeable_state=${pull.mergeable_state}, ` +
+                `bad_checks=[${badRuns.map(run => run.name).join(', ')}], ` +
+                `commit_status=${combinedStatus.state}, workflow_matches_main=${workflowMatchesMain}`,
               );
               return;
             }
