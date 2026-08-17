@@ -19,7 +19,9 @@ Issue #35 のV1実装です。Claude APIとOpenAI APIを交互に1回ずつ呼�
 
 `topic`は、`議題: {topic}`という形でそのままAIへのプロンプトに埋め込まれ、AIの応答(討議内容)は生成されるDecision Proposal Issue本文へ、JSON解析失敗時は生レスポンスの一部(既定4000文字、APIキー一致文字列のみ伏せ字化)がActionsログへ、それぞれ**Publicな形で残ります**。APIキー自体の伏せ字化は実装されていますが、議題の機密性そのものを守る仕組みではありません。
 
-実際の事業運営に関わる議題を扱いたい場合は、本パイプラインを使わず、既存のIssue/PRベースの通常フロー(篠さん・Claude Code・Codexとの直接のやり取り)を使ってください。テスト・検証目的の議題を使う場合は、`(合成テスト議題、実プロジェクトとは無関係)`等、テスト由来であることが分かる注記を`topic`本文に含める運用とします(過去のTC実施ではこの慣行が徹底されており、2026-08-17時点で過去の全Actions run・生成Issueを監査した結果、機密情報の混入は確認されていません)。
+機密情報を含む、または含む可能性を否定できない実業務の議題は、本パイプラインだけでなく、PublicなIssue・PR・commit・Actionsへも書き込まないでください。詳細をGitHubへ転記せず、必要最小限の非機密情報だけで篠さん(CEO)へrouting判断を求めます。現時点では新しいprivate control repositoryやconfidential control planeは設けません。テスト・検証目的の議題を使う場合は、`(合成テスト議題、実プロジェクトとは無関係)`等、テスト由来であることが分かる注記を`topic`本文に含める運用とします(過去のTC実施ではこの慣行が徹底されており、2026-08-17時点で過去の全Actions run・生成Issueを監査した結果、機密情報の混入は確認されていません)。
+
+Workflow実行画面の`public_content_confirmed`は、上記確認を実行前に明示するためのfail-closed gateです。未確認のままではAPI呼び出しもIssue起票も行いません。この確認は機密情報を自動検出するscannerではないため、入力者による事前確認を代替しません。
 
 ## 構成
 
@@ -66,11 +68,12 @@ Issue #35 のV1実装です。Claude APIとOpenAI APIを交互に1回ずつ呼�
 ## 実行方法
 
 1. Actionsから **AI discussion pipeline** を選ぶ。
-2. `topic`を入力する。
-3. 通常は`force_first_mover: auto`を選ぶ。CEOが先攻を指定する場合だけ`chatgpt`または`claude`を選ぶ。
-4. 完了後、Actions Summaryでモデル、API call数、token usage、概算costを確認する。
-5. 起票された`[AI Discussion]` Issueの討議結果と分類を確認する。
-6. CEO本人がIssueへ単独行の`/approve`または`/reject`をコメントする。`/reject`の次の行以降は理由として記録される。
+2. `topic`が公開可能であり、禁止情報を含まないことを入力前に確認する。
+3. `topic`を入力し、`public_content_confirmed`を有効にする。確認できない場合は実行しない。
+4. 通常は`force_first_mover: auto`を選ぶ。CEOが先攻を指定する場合だけ`chatgpt`または`claude`を選ぶ。
+5. 完了後、Actions Summaryでモデル、API call数、token usage、概算costを確認する。
+6. 起票された`[AI Discussion]` Issueの討議結果と分類を確認する。
+7. CEO本人がIssueへ単独行の`/approve`または`/reject`をコメントする。`/reject`の次の行以降は理由として記録される。
 
 `workflow_dispatch`と`issue_comment`はworkflowがdefault branchに存在するときだけ起動します。PR上のworkflowはローカル・静的テストまでとし、実機E2Eはレビュー・マージ後に行います。
 

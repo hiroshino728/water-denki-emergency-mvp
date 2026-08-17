@@ -379,5 +379,19 @@ class ClassificationAndBuilderTests(unittest.TestCase):
         self.assertIn("| chatgpt | openai | `discussion-model` | 2 | 1 |", summary)
 
 
+class WorkflowContractTests(unittest.TestCase):
+    def test_public_content_confirmation_is_fail_closed_before_api_steps(self) -> None:
+        workflow = (
+            SCRIPT_DIR.parents[1] / ".github" / "workflows" / "ai_discussion_pipeline.yml"
+        ).read_text()
+        self.assertIn("public_content_confirmed:", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn("inputs.public_content_confirmed != true", workflow)
+        self.assertLess(
+            workflow.index("Enforce Public repository content gate"),
+            workflow.index("Route first speaker"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
