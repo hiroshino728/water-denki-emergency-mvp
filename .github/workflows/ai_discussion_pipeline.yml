@@ -4,9 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       topic:
-        description: Topic for the Claude / ChatGPT discussion
+        description: Public-safe topic only; never enter secrets, personal data, or confidential business information
         required: true
         type: string
+      public_content_confirmed:
+        description: Confirm the topic is safe for a Public repository
+        required: true
+        default: false
+        type: boolean
       force_first_mover:
         description: Override the first speaker, or use automatic routing
         required: true
@@ -48,6 +53,13 @@ jobs:
       RUN_DIR: ${{ github.workspace }}/.tmp/ai-discussion
 
     steps:
+      - name: Enforce Public repository content gate
+        if: ${{ inputs.public_content_confirmed != true }}
+        shell: bash
+        run: |
+          echo "::error::Public-safe confirmation is required. Do not enter confidential details in topic."
+          exit 1
+
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

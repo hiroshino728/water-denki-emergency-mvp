@@ -25,6 +25,16 @@ Issueに着手する前に、このAGENTS.mdに加えて**必ず`docs/ai_collabo
 - 「さっき話した件」「前回説明した通り」といった前提に依存する引き継ぎは無効。次に着手するエージェント(人間を含む)がGitHubの情報だけを読んで再開できる状態を、作業終了時に必ず作ること。
 - したがって、作業の意図・判断理由・残タスクは、口頭やチャットではなく **Issue本文(特にLatest Handoff)・Issueコメント・PR説明・コミットメッセージ** に書く。これが唯一の引き継ぎ手段である。
 
+### 0.1 Public repository content gate
+
+`water-denki-emergency-mvp`と`mizu-denki-emergency-docs`は、2026-08-18時点でどちらもPublicである。GitHubへ書く内容とAI discussion pipelineへ入力する内容は、第三者へ公開される前提で扱う。
+
+- Secrets、API key、token、LINE User ID、顧客・加盟店の個人情報、料金戦略、加盟店交渉方針、実加盟店ヒアリング結果、未公開の契約条件・事業戦略等を、commit、Issue、コメント、PR、Actions log/summary/artifactへ書き込まない。
+- 機密情報を含む、または含む可能性を否定できない議題ではAI discussion pipelineを実行しない。内容をGitHubへ転記せず、必要最小限の非機密情報だけでCEOへrouting判断を求める。
+- Repository visibilityの変更はCEO Decision事項である。AIエージェントはPublic/Privateを独断で変更しない。
+
+公開境界と禁止事項のSSOTは`docs/AI_COLLABORATION.md`、pipeline固有の入力規則は`scripts/ai_discussion/README.md`を参照する。
+
 ---
 
 ## 1. Issue運用の要点(詳細は `docs/ai_collaboration_rules_v2.1.md`)
