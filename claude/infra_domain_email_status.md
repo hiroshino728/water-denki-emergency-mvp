@@ -39,6 +39,36 @@ Purelymail管理画面から以下の値を取得済み：
   | `purelymail2._domainkey` | `key2.dkimroot.purelymail.com` |
   | `purelymail3._domainkey`（※篠さんからの共有時は`purelymail3_domainkey`とドット抜けで届いたため、1・2件目のパターンに合わせて訂正。要最終確認） | `key3.dkimroot.purelymail.com` |
 
-## フェーズ2〜7
+## フェーズ2：XServer DNSレコードの変更（完了）
 
-フェーズ2（XServer DNSレコード変更）の作業方法について篠さんに確認中。確認後、このファイルに追記しながら進める。
+**2026-08-22 実施。** XServerドメイン管理画面（DNSレコード設定、`id_domain=22785435`）を、篠さんの認証済みセッション（Claude in Chrome経由）で操作した。
+
+実施内容：
+
+1. 以下7件を新規追加：
+
+   | ホスト名 | 種別 | 内容 | TTL | 優先度 |
+   |---|---|---|---|---|
+   | `@` | MX | `mailserver.purelymail.com` | 3600 | 50 |
+   | `@` | TXT | `v=spf1 include:_spf.purelymail.com ~all` | 3600 | - |
+   | `@` | TXT | `purelymail_ownership_proof=ad9b0698242f909ba8f894d69e941b146f7344343f9bbcea184d7e73252ebd2bb139915d2da6b4771127468c18a535275ad684d20853757a827235581a7eaafe` | 3600 | - |
+   | `purelymail1._domainkey` | CNAME | `key1.dkimroot.purelymail.com` | 3600 | - |
+   | `purelymail2._domainkey` | CNAME | `key2.dkimroot.purelymail.com` | 3600 | - |
+   | `purelymail3._domainkey` | CNAME | `key3.dkimroot.purelymail.com` | 3600 | - |
+   | `_dmarc` | TXT | `v=DMARC1; p=none; rua=mailto:info@mizudenki-kyukyu.jp` | 3600 | - |
+
+2. 既存のImprovMX用レコードを削除：
+   - MX `mx1.improvmx.com`（優先度10）
+   - MX `mx2.improvmx.com`（優先度20）
+   - TXT (SPF) `v=spf1 include:spf.improvmx.com ~all`
+
+- A/CNAME（`www` → GitHub Pages）は変更していない。
+- 削除操作は1件ずつ確認画面で対象レコードを確認したうえで実行した。
+
+## フェーズ3：DNS反映の検証
+
+**ステータス：未着手。** DNS反映まで数時間〜最大24-48時間かかる可能性があるため、時間を空けてから `dns.google` 経由で検証し、Purelymail管理画面の「Check DNS records」で "not yet validated" が消えることを確認する。
+
+## フェーズ4〜7
+
+未着手。フェーズ3の検証完了後に進める。
