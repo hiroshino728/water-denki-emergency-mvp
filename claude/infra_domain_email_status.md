@@ -82,6 +82,16 @@ TXT (DMARC):     v=DMARC1; p=none; rua=mailto:info@mizudenki-kyukyu.jp
   - MX record found. / SPF record found. / DKIM record purelymail1〜3._domainkey found.（いずれも正常）
 - DMARC警告の原因調査：`dns.google` / Cloudflare DNS (`cloudflare-dns.com`) / XServer権威ネームサーバー(`ns1.xdomain.ne.jp`)に直接問い合わせたところ、いずれも `_dmarc.mizudenki-kyukyu.jp TXT` = `v=DMARC1; p=none; rua=mailto:info@mizudenki-kyukyu.jp` を正しく返しており、レコード自体に問題はない。Purelymail側の一時的なキャッシュ(レコード追加前の結果が残っている可能性)によるものと推測され、時間を置いた再チェックで解消する見込み。ブロッカーではないと判断し、フェーズ4に進む。
 
-## フェーズ4〜7
+## フェーズ4：Purelymail側メールボックス作成・受信設定（完了）
 
-未着手。フェーズ3のPurelymail側検証（篠さん確認待ち）の後に進める。
+- **メールボックス作成**：篠さんご自身が実施（パスワード設定を伴うため、エージェントの安全ルール上、アカウント作成・パスワード入力は代行不可と判断し、人間作業とした）。
+- **管理画面へのログイン不具合**：エージェント(Claude in Chrome)からPurelymail管理画面(`https://purelymail.com/manage`)にアクセスした際、篠さんのアカウント(`shino0728@purelymail.com`、Chrome保存パスワードで自動入力済み)でログインしようとしたところ、パスワードは合っているにも関わらずログイン画面に戻る現象が発生。原因未特定(Cookie/拡張機能/2段階認証等の可能性を提示したが、切り分けは未実施)。エージェントはパスワードでの認証操作自体を代行できないため、この時点で引き継ぎ、篠さんご自身がログインして手動で設定を完了した。
+- **受信転送設定**：篠さんご自身がPurelymail管理画面のRouting Rules(想定)で、`info@mizudenki-kyukyu.jp` 宛のメールを `shino0728@gmail.com` へ転送するルールを設定し、完了を確認。エージェント側では画面を直接確認できていないため、実際のルール内容(Also send/Forwardのどちらを選んだか等)の詳細記録はなし。
+
+## フェーズ5：Gmail「名前を付けて送信」設定【人間作業・篠さん専任】
+
+**ステータス：未着手（次のアクション）。** SMTPパスワード入力を伴うため、エージェントは代行しない。
+
+## フェーズ6〜7
+
+未着手。フェーズ5完了後に進める。
