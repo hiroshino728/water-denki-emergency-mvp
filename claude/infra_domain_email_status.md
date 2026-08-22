@@ -77,7 +77,10 @@ CNAME (DKIM1):   purelymail1._domainkey → key1.dkimroot.purelymail.com
 TXT (DMARC):     v=DMARC1; p=none; rua=mailto:info@mizudenki-kyukyu.jp
 ```
 
-- 残タスク：Purelymail管理画面の「Check DNS records」相当のボタンでの検証は、Purelymailダッシュボードへのログインが必要なため未実施。**篠さんに、Purelymail管理画面でドメイン設定ページを開き「not yet validated」表示が消えていることを確認していただくようお願いする。**
+- **篠さんによるPurelymail側「Check DNS records」実施結果（2026-08-22）**：DNSレコードは受理（acceptable）。ただし以下の警告あり：
+  - `No DMARC record found.`（警告）
+  - MX record found. / SPF record found. / DKIM record purelymail1〜3._domainkey found.（いずれも正常）
+- DMARC警告の原因調査：`dns.google` / Cloudflare DNS (`cloudflare-dns.com`) / XServer権威ネームサーバー(`ns1.xdomain.ne.jp`)に直接問い合わせたところ、いずれも `_dmarc.mizudenki-kyukyu.jp TXT` = `v=DMARC1; p=none; rua=mailto:info@mizudenki-kyukyu.jp` を正しく返しており、レコード自体に問題はない。Purelymail側の一時的なキャッシュ(レコード追加前の結果が残っている可能性)によるものと推測され、時間を置いた再チェックで解消する見込み。ブロッカーではないと判断し、フェーズ4に進む。
 
 ## フェーズ4〜7
 
