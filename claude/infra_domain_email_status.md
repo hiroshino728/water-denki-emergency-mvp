@@ -25,18 +25,20 @@
 
 ## フェーズ1：Purelymailアカウント作成・ドメイン追加（人間作業・篠さん専任）
 
-**ステータス：未着手。篠さんの作業待ち。**
+**ステータス：完了（篠さんによりアカウント作成・ドメイン追加済み）。**
 
-Claude Codeは以下を代行しない（アカウント作成・支払いに該当するため）：
+Purelymail管理画面から以下の値を取得済み：
 
-1. purelymail.com でアカウント作成（Simple pricing $10/年を推奨）。
-2. Purelymail管理画面で `mizudenki-kyukyu.jp` をドメインとして追加。
-3. 以下の値をダッシュボード表示のまま控えて共有：
-   - `purelymail_ownership_proof` の値（TXTレコード用）
-   - DKIM用CNAMEレコード3件（`purelymail1〜3._domainkey` とそれぞれの向き先）
+- `purelymail_ownership_proof`（TXTレコード用）：
+  `ad9b0698242f909ba8f894d69e941b146f7344343f9bbcea184d7e73252ebd2bb139915d2da6b4771127468c18a535275ad684d20853757a827235581a7eaafe`
+- DKIM用CNAMEレコード3件：
 
-これらの値が揃い次第、フェーズ2（XServer DNSレコード変更）に進む。
+  | Name | Content |
+  |---|---|
+  | `purelymail1._domainkey` | `key1.dkimroot.purelymail.com` |
+  | `purelymail2._domainkey` | `key2.dkimroot.purelymail.com` |
+  | `purelymail3._domainkey`（※篠さんからの共有時は`purelymail3_domainkey`とドット抜けで届いたため、1・2件目のパターンに合わせて訂正。要最終確認） | `key3.dkimroot.purelymail.com` |
 
 ## フェーズ2〜7
 
-未着手。フェーズ1で値を受け取り次第、このファイルに追記しながら進める。
+フェーズ2（XServer DNSレコード変更）の作業方法について篠さんに確認中。確認後、このファイルに追記しながら進める。
