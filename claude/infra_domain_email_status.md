@@ -92,10 +92,16 @@ TXT (DMARC):     v=DMARC1; p=none; rua=mailto:info@mizudenki-kyukyu.jp
 
 篠さんご自身がGmail設定でSMTP (`smtp.purelymail.com`) を使った `info@mizudenki-kyukyu.jp` の送信元追加・確認メールでの確認を完了。
 
-## フェーズ6：動作確認
+## フェーズ6：動作確認（完了）
 
-**ステータス：未着手（次のアクション）。** 外部アドレスからの受信確認・Gmailからの送信確認とも、篠さんの実際のメールアカウントでの操作が必要なため人間作業。エージェントは結果の解釈・記録を担当する。
+篠さんにより、外部アドレスからの `info@mizudenki-kyukyu.jp` 宛送信→Gmail受信、およびGmailから `info@` を送信元とした送信の両方向を確認いただき、結果はOK。SPF/DKIM/DMARCの詳細な判定結果（mail-tester.com等でのスコア等）は本セッションでは個別に受け取っていない。
 
-## フェーズ7：後片付け・記録更新
+## フェーズ7：後片付け・記録更新（完了）
 
-未着手。フェーズ6完了後に実施。
+- ImprovMX側の設定：フェーズ2でXServer DNS上のImprovMX関連レコード（MX×2、SPF TXT）はすでに削除済み。ImprovMXアカウント自体は無料枠のため解約不要（篠さんの判断に委ねる）。
+- 本記録ファイル（`claude/infra_domain_email_status.md`）への追記・GitHubへのコミットは各フェーズ完了時に都度実施済み。
+- PR: [#58](https://github.com/hiroshino728/water-denki-emergency-mvp/pull/58)。AGENTS.md第3項に基づき、マージは篠さんのレビュー・判断を経て実施する（エージェントはPR作成までを担当し、自動マージしない）。
+
+## 移行ステータス：完了
+
+ImprovMX → Purelymailへのメール基盤移行、およびGmailからの `info@mizudenki-kyukyu.jp` 送受信設定は、フェーズ0〜7すべて完了。
