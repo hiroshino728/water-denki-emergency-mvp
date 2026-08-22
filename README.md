@@ -16,6 +16,7 @@
 | `docs/business_workflow.md` | 顧客・加盟店・運営・例外の業務フロー |
 | `docs/adr/` | 技術選定・アーキテクチャの意思決定記録(ADR) |
 
+AI討議パイプラインの手動起動手順は、[AI Discussion Pipeline](scripts/ai_discussion/README.md#実行方法)を参照してください。
 ## 変更ルール(開発憲章)
 
 **設計書が更新されていない状態で、Bubbleの構造(データモデル・業務フロー・技術選定)を変更しない。**
