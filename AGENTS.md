@@ -87,6 +87,11 @@ AIエージェントのセッションは、利用制限・クラッシュ・タ
 
 - **Tier 2(原則・デフォルト)**: 上記の手順(レビュー・篠さんの確認を経てマージ)。`Does this PR change a Decision?`が`Yes`のPR、ADR新規・変更、Gate判定に関わるPR、Production変更を伴うPR、法務・契約・金銭・責任分界に関わるPRは常にTier 2とする。
 - **Tier 1(自動マージ、限定的)**: docs submodule参照のみを更新するPR等、機械的で安全性を検証可能な種別に限り、`.github/workflows/auto-merge-docs-submodule-sync.yml`による自動マージを許可する。判定条件・fail-closed設計は`docs/ai_collaboration_rules_v2.1.md`第8節を参照。Tier 1の対象範囲拡張には、都度篠さんの承認を要する。
+- **Tier 1拡張(2026-08-22承認)**: 以下をすべて満たすPRは、Tier 1として扱い、AIがチャットでの都度確認なしにマージしてよい。
+  - `Does this PR change a Decision?` が `No`。
+  - コード変更(Bubble実装・PoC実装等)を含まない、記録・`docs/`更新のみのPR(例: `claude/`配下のインフラ・運用状況記録、作業ログの追記)。
+  - Bubble Production環境への構造変更、ADR新規・変更、Gate判定、法務・契約・金銭・責任分界に関わる内容を一切含まない。
+  - 上記いずれかに該当しない、または該当性に疑義があるPRは、これまで通りTier 2(篠さんのレビュー・マージ)とする。fail-closed(判断に迷ったら人間判断に倒す)を原則とする。
 
 ---
 
