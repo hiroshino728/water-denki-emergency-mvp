@@ -67,8 +67,18 @@ Purelymail管理画面から以下の値を取得済み：
 
 ## フェーズ3：DNS反映の検証
 
-**ステータス：未着手。** DNS反映まで数時間〜最大24-48時間かかる可能性があるため、時間を空けてから `dns.google` 経由で検証し、Purelymail管理画面の「Check DNS records」で "not yet validated" が消えることを確認する。
+**2026-08-22 実施。dns.google経由の検証は完了。** フェーズ2のレコード変更直後に確認したところ、想定していた反映待ち時間（数時間〜24-48時間）よりも早く、すべて期待通りに解決した。
+
+```
+MX:              50 mailserver.purelymail.com
+TXT (ownership): purelymail_ownership_proof=ad9b0698...（フェーズ1の値と一致）
+TXT (SPF):       v=spf1 include:_spf.purelymail.com ~all
+CNAME (DKIM1):   purelymail1._domainkey → key1.dkimroot.purelymail.com
+TXT (DMARC):     v=DMARC1; p=none; rua=mailto:info@mizudenki-kyukyu.jp
+```
+
+- 残タスク：Purelymail管理画面の「Check DNS records」相当のボタンでの検証は、Purelymailダッシュボードへのログインが必要なため未実施。**篠さんに、Purelymail管理画面でドメイン設定ページを開き「not yet validated」表示が消えていることを確認していただくようお願いする。**
 
 ## フェーズ4〜7
 
-未着手。フェーズ3の検証完了後に進める。
+未着手。フェーズ3のPurelymail側検証（篠さん確認待ち）の後に進める。
